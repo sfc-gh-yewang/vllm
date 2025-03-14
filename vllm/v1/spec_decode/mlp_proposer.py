@@ -4,9 +4,9 @@ from typing import Optional
 import numpy as np
 import torch
 
-from vllm.model_executor.models.mlp_speculator import MLPSpeculator
+from vllm.model_executor.models.arctic_speculator import MLPSpeculator
 
-class NgramProposer:
+class MLPProposer:
     
     def link_model(
         self,

@@ -55,8 +55,8 @@ class MLPSpeculatorLayerNorm(nn.Module):
             x = x + self.bias
         return x
 
-
-class MLPSpeculator(nn.Module):
+# bugbug
+class MLPSpeculator2(nn.Module):
     """
     An implementation of the speculative models introduced in
     "Accelerating Production LLMs with Combined Token/Embedding
