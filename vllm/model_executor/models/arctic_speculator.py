@@ -95,6 +95,9 @@ class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
         self.tie_weights = config.tie_weights
         self.scale_input = config.scale_input
         self.quantize_lm_head = config.quantize_lm_head
+        
+        # bugbug
+        self.quantize_lm_head = False
 
         quant_config = Fp8Config() if self.quantize_lm_head else None
 
@@ -205,7 +208,8 @@ class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
         self.cuda_graph_max_batch_size = 0
         self.cuda_graph_mode = False
         if not vllm_config.model_config.enforce_eager:
-            self.cuda_graph_mode = True
+            # bugbug
+            self.cuda_graph_mode = False
             self.cuda_graphs = {}
             self.cuda_graph_max_batch_size = padding_size(
                 vllm_config.scheduler_config.max_num_seqs
@@ -300,7 +304,7 @@ class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
         input_ids: torch.Tensor,
         previous_hidden_states: torch.Tensor,
         num_predict_tokens: int,
-    ) -> List[SamplerOutput]:
+    ) -> List[torch.tensor]:
         if num_predict_tokens > self.max_speculative_tokens:
             raise ValueError(
                 f"Max speculative tokens for model is "
@@ -362,8 +366,7 @@ class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
         next_tokens = []
         for i in range(num_predict_tokens):
             next_tokens.append(
-                SamplerOutput(sampled_token_ids=static_next_tokens[i][:batch_size])
-            )
+                static_next_tokens[i][:batch_size])
 
         return next_tokens
 
