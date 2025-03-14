@@ -152,17 +152,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.use_spec_decode = True
             self.rejection_sampler = RejectionSampler()
             # TODO: find a better way to check if we are using ngram.
-            assert self.speculative_config.ngram_prompt_lookup_min, \
-                    "Currently, only ngram spec decode is supported in V1."
+            # assert self.speculative_config.ngram_prompt_lookup_min, \
+            #         "Currently, only ngram spec decode is supported in V1."
             if get_pp_group().is_last_rank:
                 self.drafter = NgramProposer()
                 # Trigger Numba JIT compilation for N-gram proposer.
                 # This usually takes less than 1 second.
-                self.drafter.propose(
-                    np.zeros(1024, dtype=np.int32),
-                    self.speculative_config.ngram_prompt_lookup_min,
-                    self.speculative_config.num_speculative_tokens,
-                )
+                # self.drafter.propose(
+                #     np.zeros(1024, dtype=np.int32),
+                #     self.speculative_config.ngram_prompt_lookup_min,
+                #     self.speculative_config.num_speculative_tokens,
+                # )
 
         # Request states.
         self.requests: dict[str, CachedRequestState] = {}
@@ -1119,11 +1119,33 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                                   self.scheduler_config,
                                                   self.lora_config,
                                                   self.device)
+            if self.speculative_config:
+                self.draft_model = self._load_spec_model(vllm_config=self.vllm_config,
+                                                         speculative_config=self.speculative_config)
             time_after_load = time.perf_counter()
         self.model_memory_usage = m.consumed_memory
         logger.info("Model loading took %.4f GB and %.6f seconds",
                     self.model_memory_usage / float(2**30),
                     time_after_load - time_before_load)
+        
+    from vllm.config import VllmConfig, SpeculativeConfig
+    def _load_spec_model(
+        self,
+        vllm_config: VllmConfig,
+        speculative_config: SpeculativeConfig,
+    ) -> nn.Module:
+        import copy
+        draft_worker_config = copy.deepcopy(vllm_config)
+        draft_worker_config.model_config = speculative_config.draft_model_config
+        draft_worker_config.quant_config = VllmConfig._get_quantization_config(
+            draft_worker_config.model_config,
+            vllm_config.load_config,
+        )
+        speculative_config.draft_parallel_config.worker_cls =\
+            draft_worker_config.parallel_config.sd_worker_cls
+        draft_worker_config.parallel_config = speculative_config.draft_parallel_config
+        
+        return get_model(vllm_config=draft_worker_config)
 
     def _get_prompt_logprobs_dict(
         self,
