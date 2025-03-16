@@ -269,8 +269,12 @@ class LogitsProcessorOpt(nn.Module):
         lm_head: VocabParallelEmbedding,
         embedding_bias: Optional[torch.Tensor],
     ) -> Optional[torch.Tensor]:
+        # bugbug
         # Get the logits for the next tokens.
-        logits = lm_head.linear_method.apply(lm_head,
+        # logits = lm_head.linear_method.apply(lm_head,
+        #                                      hidden_states,
+        #                                      bias=embedding_bias)
+        logits = lm_head.quant_method.apply(lm_head,
                                              hidden_states,
                                              bias=embedding_bias)
 

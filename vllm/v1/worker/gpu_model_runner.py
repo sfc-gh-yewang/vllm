@@ -1112,7 +1112,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # )
             drafter_output = self.drafter.propose(
                 self.input_batch.token_ids_cpu[i, end_idx - 1:end_idx],
-                previous_hidden_states=previous_hidden_states[i]
+                previous_hidden_states=previous_hidden_states[i].unsqueeze(0),
             )
             if drafter_output is None or len(drafter_output) == 0:
                 draft_token_ids.append([])

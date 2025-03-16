@@ -375,7 +375,7 @@ class MLPSpeculator(nn.Module):
             next_tokens.append(
                 static_next_tokens[i][:batch_size])
 
-        return next_tokens
+        return torch.cat(next_tokens, dim=-1)
 
     def maybe_load_weight(self, param, loaded_weight):
         if param is not None:
