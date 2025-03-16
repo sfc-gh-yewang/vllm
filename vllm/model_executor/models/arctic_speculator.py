@@ -13,7 +13,7 @@ from vllm.model_executor.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
-from vllm.model_executor.models.utils import padding_size
+#from vllm.model_executor.models.utils import padding_size
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.distributed import (
     tensor_model_parallel_all_gather,
@@ -21,9 +21,14 @@ from vllm.distributed import (
     get_tensor_model_parallel_rank,
 )
 
-from .interfaces import LoRAExemptionForSpeculator
-
 SQRT2 = 2**0.5
+
+def padding_size(size: int) -> int:
+    """Round up a size to the nearest multiple of 4."""
+    mult = (1 << (size - 1).bit_length()) // 4
+    if mult < 1:
+        return size
+    return (size + mult - 1) //  mult * mult
 
 
 class MLPSpeculatorLayerNorm(nn.Module):
@@ -69,7 +74,7 @@ def _generate_cg_key(padding_size: int, head_index: int):
     return (padding_size << 16) + head_index
 
 
-class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
+class MLPSpeculator(nn.Module):
     """
     An implementation of the speculative models introduced in
     "Accelerating Production LLMs with Combined Token/Embedding
@@ -94,7 +99,8 @@ class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
 
         self.tie_weights = config.tie_weights
         self.scale_input = config.scale_input
-        self.quantize_lm_head = config.quantize_lm_head
+        # bugbug
+        #self.quantize_lm_head = config.quantize_lm_head
         
         # bugbug
         self.quantize_lm_head = False
@@ -125,20 +131,21 @@ class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
                 self.inner_dim,
                 bias=False,
                 quant_config=quant_config,
-                skip_quantization=True,
+                #skip_quantization=True, #bugbug
             )
             self.head = nn.ModuleList([head] * self.max_speculative_tokens)
 
-            if self.quantize_lm_head:
-                qhead = ParallelLMHead(
-                    self.vocab_size,
-                    self.inner_dim,
-                    bias=False,
-                    quant_config=quant_config,
-                    skip_quantization=False,
-                )
-                qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
-                self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
+            # bugbug
+            # if self.quantize_lm_head:
+            #     qhead = ParallelLMHead(
+            #         self.vocab_size,
+            #         self.inner_dim,
+            #         bias=False,
+            #         quant_config=quant_config,
+            #         skip_quantization=False,
+            #     )
+            #     qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
+            #     self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
 
             ln = MLPSpeculatorLayerNorm(
                 self.inner_dim, elementwise_scale_and_shift=True
@@ -387,7 +394,7 @@ class MLPSpeculator(nn.Module, LoRAExemptionForSpeculator):
                 self.maybe_load_weight(param, loaded_weight)
 
 
-class MLPVariantSpeculator(nn.Module, LoRAExemptionForSpeculator):
+class MLPVariantSpeculator(nn.Module):
     """
     An implementation of the speculative models introduced in
     "Accelerating Production LLMs with Combined Token/Embedding

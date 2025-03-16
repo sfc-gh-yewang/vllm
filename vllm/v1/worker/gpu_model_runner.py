@@ -37,6 +37,7 @@ from vllm.v1.outputs import (EMPTY_MODEL_RUNNER_OUTPUT, LogprobsTensors,
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.rejection_sampler import INVALID_TOKEN_ID, RejectionSampler
 from vllm.v1.spec_decode.ngram_proposer import NgramProposer
+from vllm.v1.spec_decode.mlp_proposer import MLPProposer
 from vllm.v1.utils import bind_kv_cache
 from vllm.v1.worker.gpu_input_batch import CachedRequestState, InputBatch
 from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
@@ -154,15 +155,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # TODO: find a better way to check if we are using ngram.
             # assert self.speculative_config.ngram_prompt_lookup_min, \
             #         "Currently, only ngram spec decode is supported in V1."
+            # if get_pp_group().is_last_rank:
+            #     self.drafter = NgramProposer()
+            #     # Trigger Numba JIT compilation for N-gram proposer.
+            #     # This usually takes less than 1 second.
+            #     self.drafter.propose(
+            #         np.zeros(1024, dtype=np.int32),
+            #         self.speculative_config.ngram_prompt_lookup_min,
+            #         self.speculative_config.num_speculative_tokens,
+            #     )
             if get_pp_group().is_last_rank:
-                self.drafter = NgramProposer()
-                # Trigger Numba JIT compilation for N-gram proposer.
-                # This usually takes less than 1 second.
-                # self.drafter.propose(
-                #     np.zeros(1024, dtype=np.int32),
-                #     self.speculative_config.ngram_prompt_lookup_min,
-                #     self.speculative_config.num_speculative_tokens,
-                # )
+                self.drafter = MLPProposer()
 
         # Request states.
         self.requests: dict[str, CachedRequestState] = {}
@@ -1068,8 +1071,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if not self.use_spec_decode:
             spec_token_ids = None
         else:
+            # spec_token_ids = self.generate_draft_token_ids(
+            #     valid_sampled_token_ids)
             spec_token_ids = self.generate_draft_token_ids(
-                valid_sampled_token_ids)
+                valid_sampled_token_ids,
+                previous_hidden_states=sample_hidden_states,
+            )
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -1083,6 +1090,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
     def generate_draft_token_ids(
         self,
         sampled_token_ids: list[list[int]],
+        previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
         # TODO(woosuk): Optimize.
         draft_token_ids: list[list[int]] = []
@@ -1097,10 +1105,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + num_sampled_ids
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
+            # drafter_output = self.drafter.propose(
+            #     self.input_batch.token_ids_cpu[i, :end_idx],
+            #     self.speculative_config.ngram_prompt_lookup_min,
+            #     self.speculative_config.num_speculative_tokens,
+            # )
             drafter_output = self.drafter.propose(
-                self.input_batch.token_ids_cpu[i, :end_idx],
-                self.speculative_config.ngram_prompt_lookup_min,
-                self.speculative_config.num_speculative_tokens,
+                self.input_batch.token_ids_cpu[i, end_idx - 1:end_idx],
+                previous_hidden_states=previous_hidden_states[i]
             )
             if drafter_output is None or len(drafter_output) == 0:
                 draft_token_ids.append([])
@@ -1122,12 +1134,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if self.speculative_config:
                 self.draft_model = self._load_spec_model(vllm_config=self.vllm_config,
                                                          speculative_config=self.speculative_config)
+                self.drafter.link_model(self.draft_model)
             time_after_load = time.perf_counter()
         self.model_memory_usage = m.consumed_memory
         logger.info("Model loading took %.4f GB and %.6f seconds",
                     self.model_memory_usage / float(2**30),
                     time_after_load - time_before_load)
-        
+       
+    # TODO: Move this to a separate class? 
     from vllm.config import VllmConfig, SpeculativeConfig
     def _load_spec_model(
         self,
