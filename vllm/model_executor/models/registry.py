@@ -196,7 +196,7 @@ _SPECULATIVE_DECODING_MODELS = {
     "EAGLEModel": ("eagle", "EAGLE"),
     "DeepSeekMTPModel": ("deepseek_mtp", "DeepSeekMTP"),
     "MedusaModel": ("medusa", "Medusa"),
-    "MLPSpeculatorPreTrainedModel": ("mlp_speculator", "MLPSpeculator"),
+    "MLPSpeculatorPreTrainedModel": ("arctic_speculator", "MLPSpeculator"),
 }
 
 _FALLBACK_MODEL = {
