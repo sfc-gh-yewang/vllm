@@ -151,21 +151,19 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.use_spec_decode = False
         if self.speculative_config:
             self.use_spec_decode = True
-            # TODO: find a better way to check if we are using ngram.
-            # assert self.speculative_config.ngram_prompt_lookup_min, \
-            #         "Currently, only ngram spec decode is supported in V1."
-            # if get_pp_group().is_last_rank:
-            #     self.drafter = NgramProposer()
-            #     # Trigger Numba JIT compilation for N-gram proposer.
-            #     # This usually takes less than 1 second.
-            #     self.drafter.propose(
-            #         np.zeros(1024, dtype=np.int32),
-            #         self.speculative_config.ngram_prompt_lookup_min,
-            #         self.speculative_config.num_speculative_tokens,
-            #     )
             if get_pp_group().is_last_rank:
+                self.ngram_drafter = NgramProposer()
+                # bugbug: the below line causes a crash
+                # # Trigger Numba JIT compilation for N-gram proposer.
+                # # This usually takes less than 1 second.
+                # self.ngram_drafter.propose(
+                #     np.zeros(1024, dtype=np.int32),
+                #     self.speculative_config.ngram_prompt_lookup_min,
+                #     self.speculative_config.ngram_prompt_lookup_max,
+                #     self.speculative_config.num_speculative_tokens,
+                # )
+                self.mlp_drafter = MLPProposer()
                 self.rejection_sampler = RejectionSampler()
-                self.drafter = MLPProposer()
 
         # Request states.
         self.requests: dict[str, CachedRequestState] = {}
@@ -1110,33 +1108,27 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         sampled_token_ids = sampler_output.sampled_token_ids
         max_gen_len = sampled_token_ids.shape[-1]
         if max_gen_len == 1:
-            # No spec decode tokens.
             valid_sampled_token_ids = sampled_token_ids.tolist()
             previous_hidden_states = sample_hidden_states
         else:
-            # Includes spec decode tokens.
             valid_mask = sampled_token_ids != -1
             gen_lens = valid_mask.sum(dim=1)
             num_sampled_tokens = np.array(spec_decode_metadata.num_draft_tokens)
             num_sampled_tokens = torch.tensor(num_sampled_tokens, device=gen_lens.device) + 1
             hidden_states_idx = (gen_lens - 1) + torch.cumsum(num_sampled_tokens, 0) - num_sampled_tokens
-
             previous_hidden_states = sample_hidden_states[hidden_states_idx]
-            # TODO(woosuk): Optimize this.
-            valid_sampled_token_ids = [
-                seq.tolist()
-                for seq in sampled_token_ids[valid_mask].split(gen_lens.tolist())
-            ]
-            # valid_sampled_token_ids = self.rejection_sampler.parse_output(
-            # sampled_token_ids, self.input_batch.vocab_size)
+
+            valid_sampled_token_ids = self.rejection_sampler.parse_output(
+            sampled_token_ids, self.input_batch.vocab_size)
 
         if not self.use_spec_decode:
             spec_token_ids = None
         else:
-            # spec_token_ids = self.generate_draft_token_ids(
-            #     valid_sampled_token_ids)
-            spec_token_ids = self.generate_draft_token_ids(
+            spec_token_ids_archive = self.generate_draft_token_ids_ngram(
+                valid_sampled_token_ids, sampling_metadata)
+            spec_token_ids = self.generate_draft_token_ids_mlp(
                 valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
+            # combine them
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -1146,8 +1138,43 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
         )
+    
+    def generate_draft_token_ids_ngram(
+        self,
+        sampled_token_ids: list[list[int]],
+        sampling_metadata: SamplingMetadata,
+    ) -> list[list[int]]:
+        # TODO(woosuk): Optimize.
+        draft_token_ids: list[list[int]] = []
+        for i, sampled_ids in enumerate(sampled_token_ids):
+            num_sampled_ids = len(sampled_ids)
+            if not num_sampled_ids:
+                # Skip speculative decoding.
+                draft_token_ids.append([])
+                continue
 
-    def generate_draft_token_ids(
+            # Skip requests that require top-p, top-k, etc.
+            req_id = self.input_batch.req_ids[i]
+            if not is_spec_decode_supported(req_id, self.input_batch):
+                draft_token_ids.append([])
+                continue
+
+            # Add sampled_token_ids to token_ids_cpu.
+            start_idx = self.input_batch.num_tokens_no_spec[i]
+            end_idx = start_idx + num_sampled_ids
+            self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
+            drafter_output = self.ngram_drafter.propose(
+                self.input_batch.token_ids_cpu[i, :end_idx],
+                self.speculative_config.ngram_prompt_lookup_min,
+                self.speculative_config.num_speculative_tokens,
+            )
+            if drafter_output is None or len(drafter_output) == 0:
+                draft_token_ids.append([])
+            else:
+                draft_token_ids.append(drafter_output.tolist())
+        return draft_token_ids
+
+    def generate_draft_token_ids_mlp(
         self,
         sampled_token_ids: list[list[int]],
         sampling_metadata: SamplingMetadata,
@@ -1172,12 +1199,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + num_sampled_ids
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
-            # drafter_output = self.drafter.propose(
-            #     self.input_batch.token_ids_cpu[i, :end_idx],
-            #     self.speculative_config.ngram_prompt_lookup_min,
-            #     self.speculative_config.num_speculative_tokens,
-            # )
-            drafter_output = self.drafter.propose(
+            drafter_output = self.mlp_drafter.propose(
                 self.input_batch.token_ids_cpu[i, end_idx - 1:end_idx],
                 previous_hidden_states=previous_hidden_states[i].unsqueeze(0),
             )
@@ -1201,7 +1223,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if self.speculative_config:
                 self.draft_model = self._load_spec_model(vllm_config=self.vllm_config,
                                                          speculative_config=self.speculative_config)
-                self.drafter.link_model(self.draft_model)
+                self.mlp_drafter.link_model(self.draft_model)
             time_after_load = time.perf_counter()
         self.model_memory_usage = m.consumed_memory
         logger.info("Model loading took %.4f GB and %.6f seconds",

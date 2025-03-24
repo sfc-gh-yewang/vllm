@@ -1972,8 +1972,6 @@ class SpeculativeConfig:
             draft_model_config = target_model_config
             draft_parallel_config = target_parallel_config
         else:
-            ngram_prompt_lookup_max = 0
-            ngram_prompt_lookup_min = 0
             draft_model_config = ModelConfig(
                 model=speculative_model,
                 task="draft",
