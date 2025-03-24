@@ -1118,7 +1118,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             valid_mask = sampled_token_ids != -1
             gen_lens = valid_mask.sum(dim=1)
             num_sampled_tokens = np.array(spec_decode_metadata.num_draft_tokens)
-            num_sampled_tokens = torch.tensor(num_sampled_tokens, device=gen_lens.device)
+            num_sampled_tokens = torch.tensor(num_sampled_tokens, device=gen_lens.device) + 1
             hidden_states_idx = (gen_lens - 1) + torch.cumsum(num_sampled_tokens, 0) - num_sampled_tokens
 
             previous_hidden_states = sample_hidden_states[hidden_states_idx]
