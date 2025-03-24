@@ -602,7 +602,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 req_idx = self.input_batch.req_id_to_index[req_id]
                 num_draft_tokens[req_idx] = len(draft_token_ids)
 
-            spec_decode_metadata, num_sampled_tokens = self._calc_spec_decode_metadata(
+            spec_decode_metadata = self._calc_spec_decode_metadata(
                 num_draft_tokens, cu_num_tokens)
             logits_indices = spec_decode_metadata.logits_indices
 
@@ -610,7 +610,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if self.lora_config:
             self.set_active_loras(self.input_batch, num_scheduled_tokens)
 
-        return attn_metadata, logits_indices, spec_decode_metadata, num_sampled_tokens
+        return attn_metadata, logits_indices, spec_decode_metadata
 
     def _compute_cascade_attn_prefix_len(
         self,
@@ -821,7 +821,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             bonus_logits_indices=bonus_logits_indices,
             logits_indices=logits_indices,
         )
-        return metadata, num_sampled_tokens
+        return metadata
 
     def _execute_encoder(self, scheduler_output: "SchedulerOutput"):
         scheduled_encoder_inputs = scheduler_output.scheduled_encoder_inputs
@@ -978,7 +978,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             encoder_outputs = []
 
         # Prepare the decoder inputs.
-        attn_metadata, logits_indices, spec_decode_metadata, num_sampled_tokens = (
+        attn_metadata, logits_indices, spec_decode_metadata = (
             self._prepare_inputs(scheduler_output))
         
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
@@ -1115,21 +1115,20 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             previous_hidden_states = sample_hidden_states
         else:
             # Includes spec decode tokens.
-            valid_mask = sampled_token_ids != INVALID_TOKEN_ID
+            valid_mask = sampled_token_ids != -1
             gen_lens = valid_mask.sum(dim=1)
+            num_sampled_tokens = np.array(spec_decode_metadata.num_draft_tokens)
             num_sampled_tokens = torch.tensor(num_sampled_tokens, device=gen_lens.device)
             hidden_states_idx = (gen_lens - 1) + torch.cumsum(num_sampled_tokens, 0) - num_sampled_tokens
-            from vllm.distributed.parallel_state import get_tp_group
-            # if get_tp_group().is_first_rank:
-            #     print("gen_lens", gen_lens)
+
             previous_hidden_states = sample_hidden_states[hidden_states_idx]
             # TODO(woosuk): Optimize this.
             valid_sampled_token_ids = [
                 seq.tolist()
                 for seq in sampled_token_ids[valid_mask].split(gen_lens.tolist())
             ]
-            valid_sampled_token_ids = self.rejection_sampler.parse_output(
-            sampled_token_ids, self.input_batch.vocab_size)
+            # valid_sampled_token_ids = self.rejection_sampler.parse_output(
+            # sampled_token_ids, self.input_batch.vocab_size)
 
         if not self.use_spec_decode:
             spec_token_ids = None

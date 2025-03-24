@@ -1556,10 +1556,10 @@ class EngineArgs:
             # This is supported but experimental (handled below).
             if self.speculative_model == "[ngram]":
                 pass
-            else:
-                _raise_or_fallback(feature_name="Speculative Decoding",
-                                   recommend_to_remove=False)
-                return False
+            # else:
+            #     _raise_or_fallback(feature_name="Speculative Decoding",
+            #                        recommend_to_remove=False)
+            #     return False
 
         # No Disaggregated Prefill so far.
         if self.kv_transfer_config != EngineArgs.kv_transfer_config:
