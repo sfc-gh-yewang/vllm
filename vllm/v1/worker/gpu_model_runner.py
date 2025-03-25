@@ -1146,7 +1146,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 maybe_valid_token_ids, sampling_metadata
             )
             spec_token_ids = [
-                spec_token_ids_mlp[i] + spec_token_ids_ngram[i][1:]
+                spec_token_ids_mlp[i] + spec_token_ids_ngram[i]
                 for i in range(len(spec_token_ids_mlp))
             ]
 
