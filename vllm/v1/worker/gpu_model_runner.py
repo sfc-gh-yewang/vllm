@@ -1124,11 +1124,36 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         if not self.use_spec_decode:
             spec_token_ids = None
         else:
-            spec_token_ids_archive = self.generate_draft_token_ids_ngram(
-                valid_sampled_token_ids, sampling_metadata)
-            spec_token_ids = self.generate_draft_token_ids_mlp(
+            # (WIP) concating the two draft token ids and generate a tree mask
+            # spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
+            #     valid_sampled_token_ids, sampling_metadata)
+            # spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
+            #     valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
+            # # concatenate the two draft token ids
+            # spec_token_ids = [
+            #     spec_token_ids_ngram[i] + spec_token_ids_mlp[i]
+            #     for i in range(len(spec_token_ids_ngram))
+            # ]
+
+            # easier approach to use ngram proposer after mlp proposer
+            spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
                 valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
-            # combine them
+            maybe_valid_token_ids = [
+                [spec_token_ids_mlp[i][-1]]
+                for i in range(len(spec_token_ids_mlp))
+            ]
+            spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
+                maybe_valid_token_ids, sampling_metadata
+            )
+            spec_token_ids = [
+                spec_token_ids_mlp[i] + spec_token_ids_ngram[i][1:]
+                for i in range(len(spec_token_ids_mlp))
+            ]
+
+            from vllm.distributed.parallel_state import get_tp_group
+            if get_tp_group().is_first_rank:
+                print("spec_token_ids_ngram", spec_token_ids_ngram)
+                print("spec_token_ids", spec_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,

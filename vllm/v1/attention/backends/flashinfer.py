@@ -263,6 +263,19 @@ class FlashInferMetadataBuilder:
             )
         else:
             attn_metadata.prefill_wrapper = self._get_prefill_wrapper()
+
+            # mask_arr = []
+            # qo_len = (attn_metadata.qo_indptr[1:] - attn_metadata.qo_indptr[:-1]).cpu().tolist()
+            # kv_len = (attn_metadata.page_size * (attn_metadata.paged_kv_indptr[1:] - attn_metadata.paged_kv_indptr[:-1] - 1) + attn_metadata.paged_kv_last_page_len).cpu().tolist()
+            # batch_size = len(qo_len)
+            # for i in range(batch_size):
+            #     mask_i = torch.tril(
+            #         torch.full((qo_len[i], kv_len[i]), True, device=self.runner.device),
+            #         diagonal=(kv_len[i] - qo_len[i]),
+            #     )
+            #     mask_arr.append(mask_i.flatten())
+            # custom_mask = torch.cat(mask_arr, dim=0)
+
             attn_metadata.prefill_wrapper.plan(
                 attn_metadata.qo_indptr,
                 attn_metadata.paged_kv_indptr,
@@ -273,6 +286,7 @@ class FlashInferMetadataBuilder:
                 attn_metadata.head_dim,
                 attn_metadata.page_size,
                 causal=True,
+                #custom_mask=custom_mask.to(self.runner.device),
                 sm_scale=self.global_hyperparameters.sm_scale,
                 window_left=self.global_hyperparameters.window_left,
                 logits_soft_cap=self.global_hyperparameters.logits_soft_cap,
@@ -462,7 +476,7 @@ class FlashInferImpl(AttentionImpl):
         if not attn_metadata.use_cascade:
             # Regular attention (common case).
             assert attn_metadata.prefill_wrapper is not None
-            assert attn_metadata.prefill_wrapper._causal
+            #assert attn_metadata.prefill_wrapper._causal
             assert attn_metadata.prefill_wrapper._window_left == window_left
             assert attn_metadata.prefill_wrapper._logits_soft_cap == (
                 self.logits_soft_cap or 0.0)
