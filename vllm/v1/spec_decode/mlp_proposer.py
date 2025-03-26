@@ -27,9 +27,6 @@ class MLPProposer:
             previous_hidden_states=previous_hidden_states,
             num_predict_tokens=3,
         )
-
-        # bugbug: batch=1. support batch
-        assert next_tokens.shape[0] == 1
         
-        return next_tokens.cpu().numpy()[0]
+        return next_tokens.cpu().numpy()
         

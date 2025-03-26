@@ -1076,6 +1076,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 bonus_token_ids,
                 sampling_metadata,
             )
+            # from vllm.distributed.parallel_state import get_tp_group
+            # if get_tp_group().is_first_rank:
+            #     print("output_token_ids", output_token_ids)
             sampler_output.sampled_token_ids = output_token_ids
 
         # TODO(woosuk): The following loop can be slow since it iterates over
@@ -1119,41 +1122,45 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             previous_hidden_states = sample_hidden_states[hidden_states_idx]
 
             valid_sampled_token_ids = self.rejection_sampler.parse_output(
-            sampled_token_ids, self.input_batch.vocab_size)
+                sampled_token_ids, self.input_batch.vocab_size)
 
         if not self.use_spec_decode:
             spec_token_ids = None
         else:
+            # -----------------------------------------------------------------
             # (WIP) concating the two draft token ids and generate a tree mask
             # spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
             #     valid_sampled_token_ids, sampling_metadata)
-            # spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
-            #     valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
+            spec_token_ids = self.generate_draft_token_ids_mlp(
+                valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
             # # concatenate the two draft token ids
             # spec_token_ids = [
             #     spec_token_ids_ngram[i] + spec_token_ids_mlp[i]
             #     for i in range(len(spec_token_ids_ngram))
             # ]
+            # -----------------------------------------------------------------
 
+            # -----------------------------------------------------------------
             # easier approach to use ngram proposer after mlp proposer
-            spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
-                valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
-            maybe_valid_token_ids = [
-                [spec_token_ids_mlp[i][-1]]
-                for i in range(len(spec_token_ids_mlp))
-            ]
-            spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
-                maybe_valid_token_ids, sampling_metadata
-            )
-            spec_token_ids = [
-                spec_token_ids_mlp[i] + spec_token_ids_ngram[i]
-                for i in range(len(spec_token_ids_mlp))
-            ]
+            # spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
+            #     valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
+            # maybe_valid_token_ids = [
+            #     [spec_token_ids_mlp[i][-1]]
+            #     for i in range(len(spec_token_ids_mlp))
+            # ]
+            # spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
+            #     maybe_valid_token_ids, sampling_metadata
+            # )
+            # spec_token_ids = [
+            #     spec_token_ids_mlp[i] + spec_token_ids_ngram[i]
+            #     for i in range(len(spec_token_ids_mlp))
+            # ]
+            # -----------------------------------------------------------------
 
-            from vllm.distributed.parallel_state import get_tp_group
-            if get_tp_group().is_first_rank:
-                print("spec_token_ids_ngram", spec_token_ids_ngram)
-                print("spec_token_ids", spec_token_ids)
+            # from vllm.distributed.parallel_state import get_tp_group
+            # if get_tp_group().is_first_rank:
+            #     print("spec_token_ids_ngram", spec_token_ids_ngram)
+            #     print("spec_token_ids", spec_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -1206,32 +1213,25 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
         # TODO(woosuk): Optimize.
-        draft_token_ids: list[list[int]] = []
+        
+        last_tokens : list[int] = []
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
-            if not num_sampled_ids:
-                # Skip speculative decoding.
-                draft_token_ids.append([])
-                continue
-
-            # Skip requests that require top-p, top-k, etc.
-            req_id = self.input_batch.req_ids[i]
-            if not is_spec_decode_supported(req_id, self.input_batch):
-                draft_token_ids.append([])
-                continue
+            assert num_sampled_ids >= 1
 
             # Add sampled_token_ids to token_ids_cpu.
             start_idx = self.input_batch.num_tokens_no_spec[i]
             end_idx = start_idx + num_sampled_ids
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
-            drafter_output = self.mlp_drafter.propose(
-                self.input_batch.token_ids_cpu[i, end_idx - 1:end_idx],
-                previous_hidden_states=previous_hidden_states[i].unsqueeze(0),
-            )
-            if drafter_output is None or len(drafter_output) == 0:
-                draft_token_ids.append([])
-            else:
-                draft_token_ids.append(drafter_output.tolist())
+            last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
+
+        drafter_output = self.mlp_drafter.propose(
+            last_tokens,
+            previous_hidden_states=previous_hidden_states,
+        )
+        
+        draft_token_ids = drafter_output.tolist()
+
         return draft_token_ids
 
     def load_model(self) -> None:
