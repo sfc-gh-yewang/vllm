@@ -202,7 +202,8 @@ class VocabParallelEmbedding(torch.nn.Module):
                  org_num_embeddings: Optional[int] = None,
                  padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
                  quant_config: Optional[QuantizationConfig] = None,
-                 prefix: str = ""):
+                 prefix: str = "",
+                 skip_quantization: bool = True):
         super().__init__()
 
         # Keep the input dimensions.
@@ -227,7 +228,7 @@ class VocabParallelEmbedding(torch.nn.Module):
         self.embedding_dim = embedding_dim
 
         quant_method = None
-        if quant_config is not None:
+        if quant_config is not None and not skip_quantization:
             quant_method = quant_config.get_quant_method(self, prefix=prefix)
         if quant_method is None:
             quant_method = UnquantizedEmbeddingMethod()
@@ -454,7 +455,8 @@ class ParallelLMHead(VocabParallelEmbedding):
                  org_num_embeddings: Optional[int] = None,
                  padding_size: int = DEFAULT_VOCAB_PADDING_SIZE,
                  quant_config: Optional[QuantizationConfig] = None,
-                 prefix: str = ""):
+                 prefix: str = "",
+                 skip_quantization: bool = True):
         super().__init__(num_embeddings, embedding_dim, params_dtype,
                          org_num_embeddings, padding_size, quant_config,
                          prefix)

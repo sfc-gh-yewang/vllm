@@ -99,11 +99,8 @@ class MLPSpeculator(nn.Module):
 
         self.tie_weights = config.tie_weights
         self.scale_input = config.scale_input
-        # bugbug
-        #self.quantize_lm_head = config.quantize_lm_head
-        
-        # bugbug
-        self.quantize_lm_head = False
+
+        self.quantize_lm_head = True
 
         quant_config = Fp8Config() if self.quantize_lm_head else None
 
@@ -131,21 +128,20 @@ class MLPSpeculator(nn.Module):
                 self.inner_dim,
                 bias=False,
                 quant_config=quant_config,
-                #skip_quantization=True, #bugbug
+                skip_quantization=True,
             )
             self.head = nn.ModuleList([head] * self.max_speculative_tokens)
 
-            # bugbug
-            # if self.quantize_lm_head:
-            #     qhead = ParallelLMHead(
-            #         self.vocab_size,
-            #         self.inner_dim,
-            #         bias=False,
-            #         quant_config=quant_config,
-            #         skip_quantization=False,
-            #     )
-            #     qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
-            #     self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
+            if self.quantize_lm_head:
+                qhead = ParallelLMHead(
+                    self.vocab_size,
+                    self.inner_dim,
+                    bias=False,
+                    quant_config=quant_config,
+                    skip_quantization=False,
+                )
+                qhead.quant_method = Fp8LinearMethod(quant_config=quant_config)
+                self.qhead = nn.ModuleList([qhead] * self.max_speculative_tokens)
 
             ln = MLPSpeculatorLayerNorm(
                 self.inner_dim, elementwise_scale_and_shift=True

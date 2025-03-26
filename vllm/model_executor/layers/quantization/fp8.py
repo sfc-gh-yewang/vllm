@@ -105,6 +105,7 @@ class Fp8Config(QuantizationConfig):
     def get_quant_method(self, layer: torch.nn.Module,
                          prefix: str) -> Optional["QuantizeMethodBase"]:
         from vllm.attention.layer import Attention  # Avoid circular import
+        from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
 
         if isinstance(layer, LinearBase):
             if is_layer_skipped(prefix, self.ignored_layers):
@@ -114,6 +115,8 @@ class Fp8Config(QuantizationConfig):
             return Fp8MoEMethod(self)
         elif isinstance(layer, Attention):
             return Fp8KVCacheMethod(self)
+        elif isinstance(layer, VocabParallelEmbedding):
+            return Fp8LinearMethod(self)
         return None
 
 
@@ -388,6 +391,11 @@ class Fp8LinearMethod(LinearMethodBase):
                                      weight_scale=layer.weight_scale,
                                      input_scale=layer.input_scale,
                                      bias=bias)
+    
+    def embedding(self, layer: torch.nn.Module,
+                  input_: torch.Tensor) -> torch.Tensor:
+        import torch.nn.functional as F
+        return F.embedding(input_, layer.weight)
 
 
 class Fp8MoEMethod(FusedMoEMethodBase):
