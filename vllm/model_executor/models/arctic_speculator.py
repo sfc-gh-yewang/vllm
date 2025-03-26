@@ -212,7 +212,7 @@ class MLPSpeculator(nn.Module):
         self.cuda_graph_mode = False
         if not vllm_config.model_config.enforce_eager:
             # bugbug
-            self.cuda_graph_mode = False
+            self.cuda_graph_mode = True
             self.cuda_graphs = {}
             self.cuda_graph_max_batch_size = padding_size(
                 vllm_config.scheduler_config.max_num_seqs
