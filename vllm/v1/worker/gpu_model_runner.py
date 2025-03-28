@@ -1063,15 +1063,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
         else:
             sampler_output = self.model.sample(
-                logits=logits[logits_indices],
+                logits=logits,
                 sampling_metadata=sampling_metadata,
             )
-            scorer_token_ids_np = sampler_output.sampled_token_ids.cpu().numpy()
+            # Unoptimized 
+            scorer_token_ids_np = np.transpose(sampler_output.sampled_token_ids.cpu().numpy())[0]
             draft_token_ids_np = spec_decode_metadata.draft_token_ids.cpu().numpy()
             processed_draft_tokens = 0
             processed_scorer_tokens = 0
             output_token_ids : list[list[int]] = []
-            for num_draft_token in spec_decode_metadata.draft_token_ids:
+            scorer_length_with_spec = 0
+            for num_draft_token in spec_decode_metadata.num_draft_tokens:
                 draft_token_ids_per_req = draft_token_ids_np[processed_draft_tokens : processed_draft_tokens + num_draft_token]
                 processed_draft_tokens += num_draft_token
                 num_draft_token += 1
@@ -1079,6 +1081,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 processed_scorer_tokens += num_draft_token
                 if num_draft_token == 1:
                     output_token_ids.append(scorer_token_ids_per_req.tolist())
+                    output_token_ids[-1].extend([-1] * (scorer_length_with_spec - len(output_token_ids[-1])))
                 else:
                     i = 0
                     j = 0
@@ -1089,9 +1092,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         else:
                             break
                     output_token_ids.append(scorer_token_ids_per_req[:j + 1].tolist())
-                    output_token_ids[-1].extend([-1] * (len(scorer_token_ids_per_req) - len(output_token_ids[-1])))
+                    scorer_length_with_spec = len(scorer_token_ids_per_req)
+                    output_token_ids[-1].extend([-1] * (scorer_length_with_spec - len(output_token_ids[-1])))
 
-            sampler_output.sampled_token_ids = output_token_ids
+            sampler_output.sampled_token_ids = torch.tensor(output_token_ids, device=logits.device)
+            # copy slots
 
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
@@ -1161,8 +1166,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # Since spec decoding requests are put in the front of the batch
             # we can simply apply the above style mask if the q_length is 6
             # and within the range of the spec decoding requests
-            self.last_spec_reqs_num = len(scheduler_output.scheduled_spec_decode_tokens)
-            self.combined_spec_length = len(spec_token_ids_ngram) + len(spec_token_ids_mlp)
+            self.last_spec_reqs_num = len(spec_token_ids_mlp)
+            self.combined_spec_length = len(spec_token_ids_ngram[0]) + len(spec_token_ids_mlp[0])
 
             # bugbug for testing
             spec_token_ids = spec_token_ids_mlp

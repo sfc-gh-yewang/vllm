@@ -1233,6 +1233,12 @@ def copy_blocks(key_caches: list[torch.Tensor],
     torch.ops._C_cache_ops.copy_blocks(key_caches, value_caches, block_mapping)
 
 
+def copy_slots(key_caches: list[torch.Tensor],
+                value_caches: list[torch.Tensor],
+                slot_mapping: torch.Tensor) -> None:
+    torch.ops._C_cache_ops.copy_slots(key_caches, value_caches, slot_mapping)
+
+
 def copy_blocks_mla(kv_caches: list[torch.Tensor],
                     block_mapping: torch.Tensor) -> None:
     torch.ops._C_cache_ops.copy_blocks_mla(kv_caches, block_mapping)
