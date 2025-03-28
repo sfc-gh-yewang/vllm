@@ -264,17 +264,36 @@ class FlashInferMetadataBuilder:
         else:
             attn_metadata.prefill_wrapper = self._get_prefill_wrapper()
 
-            # mask_arr = []
-            # qo_len = (attn_metadata.qo_indptr[1:] - attn_metadata.qo_indptr[:-1]).cpu().tolist()
-            # kv_len = (attn_metadata.page_size * (attn_metadata.paged_kv_indptr[1:] - attn_metadata.paged_kv_indptr[:-1] - 1) + attn_metadata.paged_kv_last_page_len).cpu().tolist()
-            # batch_size = len(qo_len)
-            # for i in range(batch_size):
-            #     mask_i = torch.tril(
-            #         torch.full((qo_len[i], kv_len[i]), True, device=self.runner.device),
-            #         diagonal=(kv_len[i] - qo_len[i]),
-            #     )
-            #     mask_arr.append(mask_i.flatten())
-            # custom_mask = torch.cat(mask_arr, dim=0)
+            mask_arr = []
+            qo_len = (attn_metadata.qo_indptr[1:] -
+                      attn_metadata.qo_indptr[:-1]).cpu().tolist()
+            kv_len = (attn_metadata.page_size *
+                      (attn_metadata.paged_kv_indptr[1:] -
+                       attn_metadata.paged_kv_indptr[:-1] - 1) +
+                      attn_metadata.paged_kv_last_page_len).cpu().tolist()
+            batch_size = len(qo_len)
+            for i in range(batch_size):
+                mask_i = torch.tril(
+                    torch.full((qo_len[i], kv_len[i]),
+                               True,
+                               device=self.runner.device),
+                    diagonal=(kv_len[i] - qo_len[i]),
+                )
+                # None-optimized code for generating the following mask.
+                #  ... 1  1  1  1  0  0  0  0  0
+                #  ... 1  1  1  1  1  0  0  0  0
+                #  ... 1  1  1  1  1  1  0  0  0
+                #  ... 1  1  1  0  0  0  1  0  0
+                #  ... 1  1  1  0  0  0  1  1  0
+                #  ... 1  1  1  0  0  0  1  1  1
+                if i < self.runner.last_spec_reqs_num and qo_len[
+                        i] == self.runner.combined_spec_length:
+                    half_qo_len = qo_len[i] // 2
+                    qk_diff = kv_len[i] - qo_len[i]
+                    mask_i[half_qo_len:, qk_diff:qk_diff + half_qo_len] = False
+
+                mask_arr.append(mask_i.flatten())
+            custom_mask = torch.cat(mask_arr, dim=0)
 
             attn_metadata.prefill_wrapper.plan(
                 attn_metadata.qo_indptr,
@@ -286,7 +305,7 @@ class FlashInferMetadataBuilder:
                 attn_metadata.head_dim,
                 attn_metadata.page_size,
                 causal=True,
-                #custom_mask=custom_mask.to(self.runner.device),
+                #custom_mask=custom_mask,
                 sm_scale=self.global_hyperparameters.sm_scale,
                 window_left=self.global_hyperparameters.window_left,
                 logits_soft_cap=self.global_hyperparameters.logits_soft_cap,
@@ -335,8 +354,8 @@ class FlashInferMetadataBuilder:
 
         mask = (torch.arange(block_table.size(1),
                              dtype=block_table.dtype,
-                             device=block_table.device).unsqueeze(0)
-                < block_table_bounds.unsqueeze(1))
+                             device=block_table.device).unsqueeze(0) <
+                block_table_bounds.unsqueeze(1))
         paged_kv_indices = block_table[mask]
 
         paged_kv_indptr = torch.cat([

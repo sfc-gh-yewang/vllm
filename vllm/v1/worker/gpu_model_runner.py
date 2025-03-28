@@ -262,6 +262,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                         pin_memory=self.pin_memory)
         self.seq_lens_np = self.seq_lens_cpu.numpy()
 
+        self.last_spec_reqs_num = 0
+        self.combined_spec_length = 0
+
     def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
         """Update the cached states and the persistent batch with the scheduler
         output.
@@ -1059,26 +1062,35 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 sampling_metadata=sampling_metadata,
             )
         else:
-            # TODO(woosuk): Optimize the memory usage.
-            bonus_logits = logits[spec_decode_metadata.bonus_logits_indices]
             sampler_output = self.model.sample(
-                logits=bonus_logits,
+                logits=logits[logits_indices],
                 sampling_metadata=sampling_metadata,
             )
-            bonus_token_ids = sampler_output.sampled_token_ids
+            scorer_token_ids_np = sampler_output.sampled_token_ids.cpu().numpy()
+            draft_token_ids_np = spec_decode_metadata.draft_token_ids.cpu().numpy()
+            processed_draft_tokens = 0
+            processed_scorer_tokens = 0
+            output_token_ids : list[list[int]] = []
+            for num_draft_token in spec_decode_metadata.draft_token_ids:
+                draft_token_ids_per_req = draft_token_ids_np[processed_draft_tokens : processed_draft_tokens + num_draft_token]
+                processed_draft_tokens += num_draft_token
+                num_draft_token += 1
+                scorer_token_ids_per_req = scorer_token_ids_np[processed_scorer_tokens : processed_scorer_tokens + num_draft_token]
+                processed_scorer_tokens += num_draft_token
+                if num_draft_token == 1:
+                    output_token_ids.append(scorer_token_ids_per_req.tolist())
+                else:
+                    i = 0
+                    j = 0
+                    while i < num_draft_token - 1:
+                        if draft_token_ids_per_req[i] == scorer_token_ids_per_req[j]:
+                            i += 1
+                            j += 1
+                        else:
+                            break
+                    output_token_ids.append(scorer_token_ids_per_req[:j + 1].tolist())
+                    output_token_ids[-1].extend([-1] * (len(scorer_token_ids_per_req) - len(output_token_ids[-1])))
 
-            # TODO(woosuk): Optimize the memory usage.
-            target_logits = logits[spec_decode_metadata.target_logits_indices]
-            output_token_ids = self.rejection_sampler(
-                spec_decode_metadata,
-                None,  # draft_probs
-                target_logits,
-                bonus_token_ids,
-                sampling_metadata,
-            )
-            # from vllm.distributed.parallel_state import get_tp_group
-            # if get_tp_group().is_first_rank:
-            #     print("output_token_ids", output_token_ids)
             sampler_output.sampled_token_ids = output_token_ids
 
         # TODO(woosuk): The following loop can be slow since it iterates over
@@ -1129,15 +1141,31 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         else:
             # -----------------------------------------------------------------
             # (WIP) concating the two draft token ids and generate a tree mask
-            # spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
-            #     valid_sampled_token_ids, sampling_metadata)
-            spec_token_ids = self.generate_draft_token_ids_mlp(
+            spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
+                valid_sampled_token_ids, sampling_metadata)
+            spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
                 valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
             # # concatenate the two draft token ids
-            # spec_token_ids = [
-            #     spec_token_ids_ngram[i] + spec_token_ids_mlp[i]
-            #     for i in range(len(spec_token_ids_ngram))
-            # ]
+            spec_token_ids = [
+                spec_token_ids_mlp[i] + spec_token_ids_ngram[i]
+                for i in range(len(spec_token_ids_ngram))
+            ]
+            # if ngram results is not empty we can build the tree mask like this:
+            # assume both spec lengths are 3
+            #  1  0  0  0  0  0
+            #  1  1  0  0  0  0
+            #  1  1  1  0  0  0
+            #  0  0  0  1  0  0
+            #  0  0  0  1  1  0
+            #  0  0  0  1  1  1
+            # Since spec decoding requests are put in the front of the batch
+            # we can simply apply the above style mask if the q_length is 6
+            # and within the range of the spec decoding requests
+            self.last_spec_reqs_num = len(scheduler_output.scheduled_spec_decode_tokens)
+            self.combined_spec_length = len(spec_token_ids_ngram) + len(spec_token_ids_mlp)
+
+            # bugbug for testing
+            spec_token_ids = spec_token_ids_mlp
             # -----------------------------------------------------------------
 
             # -----------------------------------------------------------------
