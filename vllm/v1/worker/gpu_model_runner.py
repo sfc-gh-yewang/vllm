@@ -981,7 +981,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Prepare the decoder inputs.
         attn_metadata, logits_indices, spec_decode_metadata = (
             self._prepare_inputs(scheduler_output))
-        
+
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         if (self.use_cuda_graph
                 and num_scheduled_tokens <= self.cudagraph_batch_sizes[-1]):
@@ -1066,37 +1066,85 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 logits=logits,
                 sampling_metadata=sampling_metadata,
             )
-            # Unoptimized 
-            scorer_token_ids_np = np.transpose(sampler_output.sampled_token_ids.cpu().numpy())[0]
-            draft_token_ids_np = spec_decode_metadata.draft_token_ids.cpu().numpy()
+            # Unoptimized
+            scorer_token_ids_np = np.transpose(
+                sampler_output.sampled_token_ids.cpu().numpy())[0]
+            draft_token_ids_np = spec_decode_metadata.draft_token_ids.cpu(
+            ).numpy()
             processed_draft_tokens = 0
             processed_scorer_tokens = 0
-            output_token_ids : list[list[int]] = []
-            scorer_length_with_spec = 0
+            output_token_ids: list[list[int]] = []
+            last_accepted_idx: list[int] = []
+
+            def token_compare(draft, scorer):
+                i = 0
+                j = 0
+                while i < self.single_spec_length:
+                    if draft_token_ids_per_req[i] == scorer_token_ids_per_req[
+                            j]:
+                        i += 1
+                        j += 1
+                    else:
+                        break
+                return j + 1
+
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
-                draft_token_ids_per_req = draft_token_ids_np[processed_draft_tokens : processed_draft_tokens + num_draft_token]
+                draft_token_ids_per_req = draft_token_ids_np[
+                    processed_draft_tokens:processed_draft_tokens +
+                    num_draft_token]
                 processed_draft_tokens += num_draft_token
                 num_draft_token += 1
-                scorer_token_ids_per_req = scorer_token_ids_np[processed_scorer_tokens : processed_scorer_tokens + num_draft_token]
+                scorer_token_ids_per_req = scorer_token_ids_np[
+                    processed_scorer_tokens:processed_scorer_tokens +
+                    num_draft_token]
                 processed_scorer_tokens += num_draft_token
                 if num_draft_token == 1:
                     output_token_ids.append(scorer_token_ids_per_req.tolist())
-                    output_token_ids[-1].extend([-1] * (scorer_length_with_spec - len(output_token_ids[-1])))
+                    last_accepted_idx.append(0)
+                elif num_draft_token == self.combined_spec_length + 1:
+                    # draft [10, 25, 33, 10, 64, 77] => [10, 25, 33] and [10, 64, 77]
+                    # [x, 10, 25, 33, 10, 64, 77]
+                    # scorer [10, 25, 55, 36, 25,  8, 91] => [10, 25, 55, 36] and [10, 25,  8, 91]
+                    # first part [10, 25, 55, 36] matches more so use it
+                    # if the second part matches more then we need to carefully update
+                    # the last_accepted_idx which is used to obtain the right hidden states
+                    # and swap the slot_mapping to make sure the kv cache is updated correctly
+                    # to be used in the next iteration.
+                    draft_token_ids_per_req_0 = draft_token_ids_per_req[:self.
+                                                                        single_spec_length]
+                    scorer_token_ids_per_req_0 = scorer_token_ids_per_req[:self
+                                                                          .
+                                                                          single_spec_length
+                                                                          + 1]
+                    accepted_tokens_0 = token_compare(
+                        draft_token_ids_per_req_0, scorer_token_ids_per_req_0)
+                    draft_token_ids_per_req_1 = draft_token_ids_per_req[
+                        self.single_spec_length:]
+                    scorer_token_ids_per_req_1 = scorer_token_ids_per_req[
+                        0] + scorer_token_ids_per_req[self.single_spec_length +
+                                                      1:]
+                    accepted_tokens_1 = token_compare(
+                        draft_token_ids_per_req_1, scorer_token_ids_per_req_1)
+                    if accepted_tokens_0 >= accepted_tokens_1:
+                        output_token_ids.append(
+                            scorer_token_ids_per_req_0[:accepted_tokens_0].
+                            tolist())
+                        last_accepted_idx.append(accepted_tokens_0 - 1)
+                    else:
+                        output_token_ids.append(
+                            scorer_token_ids_per_req_1[:accepted_tokens_1].
+                            tolist())
+                        last_accepted_idx.append(self.single_spec_length +
+                                                 accepted_tokens_1 - 1)
+                        # TODO: update the slot_mapping to make sure the kv cache is updated correctly to be used in the next iteration.
                 else:
-                    i = 0
-                    j = 0
-                    while i < num_draft_token - 1:
-                        if draft_token_ids_per_req[i] == scorer_token_ids_per_req[j]:
-                            i += 1
-                            j += 1
-                        else:
-                            break
-                    output_token_ids.append(scorer_token_ids_per_req[:j + 1].tolist())
-                    scorer_length_with_spec = len(scorer_token_ids_per_req)
-                    output_token_ids[-1].extend([-1] * (scorer_length_with_spec - len(output_token_ids[-1])))
+                    accepted_tokens = token_compare(draft_token_ids_per_req,
+                                                    scorer_token_ids_per_req)
+                    output_token_ids.append(
+                        scorer_token_ids_per_req[:accepted_tokens].tolist())
+                    last_accepted_idx.append(accepted_tokens - 1)
 
-            sampler_output.sampled_token_ids = torch.tensor(output_token_ids, device=logits.device)
-            # copy slots
+            sampler_output.sampled_token_ids = output_token_ids
 
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
@@ -1126,16 +1174,19 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Get the valid generated tokens.
         previous_hidden_states = None
         sampled_token_ids = sampler_output.sampled_token_ids
-        max_gen_len = sampled_token_ids.shape[-1]
+        max_gen_len = max([len(x) for x in sampled_token_ids])
         if max_gen_len == 1:
             valid_sampled_token_ids = sampled_token_ids.tolist()
             previous_hidden_states = sample_hidden_states
         else:
-            valid_mask = sampled_token_ids != -1
-            gen_lens = valid_mask.sum(dim=1)
-            num_sampled_tokens = np.array(spec_decode_metadata.num_draft_tokens)
-            num_sampled_tokens = torch.tensor(num_sampled_tokens, device=gen_lens.device) + 1
-            hidden_states_idx = (gen_lens - 1) + torch.cumsum(num_sampled_tokens, 0) - num_sampled_tokens
+            last_accepted_idx = torch.tensor(
+                last_accepted_idx, device=sample_hidden_states.device)
+            num_sampled_tokens = np.array(
+                spec_decode_metadata.num_draft_tokens)
+            num_sampled_tokens = torch.tensor(
+                num_sampled_tokens, device=sample_hidden_states.device) + 1
+            hidden_states_idx = last_accepted_idx + torch.cumsum(
+                num_sampled_tokens, 0) - num_sampled_tokens
             previous_hidden_states = sample_hidden_states[hidden_states_idx]
 
             valid_sampled_token_ids = self.rejection_sampler.parse_output(
@@ -1149,7 +1200,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
                 valid_sampled_token_ids, sampling_metadata)
             spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
-                valid_sampled_token_ids, sampling_metadata, previous_hidden_states)
+                valid_sampled_token_ids, sampling_metadata,
+                previous_hidden_states)
             # # concatenate the two draft token ids
             spec_token_ids = [
                 spec_token_ids_mlp[i] + spec_token_ids_ngram[i]
@@ -1167,10 +1219,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # we can simply apply the above style mask if the q_length is 6
             # and within the range of the spec decoding requests
             self.last_spec_reqs_num = len(spec_token_ids_mlp)
-            self.combined_spec_length = len(spec_token_ids_ngram[0]) + len(spec_token_ids_mlp[0])
+            self.single_spec_length = len(spec_token_ids_mlp[0])
+            self.combined_spec_length = 2 * self.single_spec_length
 
             # bugbug for testing
-            spec_token_ids = spec_token_ids_mlp
+            # spec_token_ids = spec_token_ids_mlp
             # -----------------------------------------------------------------
 
             # -----------------------------------------------------------------
@@ -1203,7 +1256,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
         )
-    
+
     def generate_draft_token_ids_ngram(
         self,
         sampled_token_ids: list[list[int]],
@@ -1246,8 +1299,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         previous_hidden_states: Optional[torch.Tensor] = None,
     ) -> list[list[int]]:
         # TODO(woosuk): Optimize.
-        
-        last_tokens : list[int] = []
+
+        last_tokens: list[int] = []
         for i, sampled_ids in enumerate(sampled_token_ids):
             num_sampled_ids = len(sampled_ids)
             assert num_sampled_ids >= 1
@@ -1262,7 +1315,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             last_tokens,
             previous_hidden_states=previous_hidden_states,
         )
-        
+
         draft_token_ids = drafter_output.tolist()
 
         return draft_token_ids
@@ -1279,17 +1332,19 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                                   self.lora_config,
                                                   self.device)
             if self.speculative_config:
-                self.draft_model = self._load_spec_model(vllm_config=self.vllm_config,
-                                                         speculative_config=self.speculative_config)
+                self.draft_model = self._load_spec_model(
+                    vllm_config=self.vllm_config,
+                    speculative_config=self.speculative_config)
                 self.mlp_drafter.link_model(self.draft_model)
             time_after_load = time.perf_counter()
         self.model_memory_usage = m.consumed_memory
         logger.info("Model loading took %.4f GB and %.6f seconds",
                     self.model_memory_usage / float(2**30),
                     time_after_load - time_before_load)
-       
-    # TODO: Move this to a separate class? 
+
+    # TODO: Move this to a separate class?
     from vllm.config import VllmConfig, SpeculativeConfig
+
     def _load_spec_model(
         self,
         vllm_config: VllmConfig,
@@ -1305,7 +1360,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         speculative_config.draft_parallel_config.worker_cls =\
             draft_worker_config.parallel_config.sd_worker_cls
         draft_worker_config.parallel_config = speculative_config.draft_parallel_config
-        
+
         return get_model(vllm_config=draft_worker_config)
 
     def _get_prompt_logprobs_dict(

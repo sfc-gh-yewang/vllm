@@ -215,7 +215,7 @@ void copy_slots(std::vector<torch::Tensor> const& key_caches,
         vllm::copy_blocks_kernel<scalar_t><<<grid, block, 0, stream>>>(
             key_cache_ptrs_tensor.data_ptr<int64_t>(),
             value_cache_ptrs_tensor.data_ptr<int64_t>(),
-            block_mapping.data_ptr<int64_t>(), numel_per_slot);
+            slot_mapping.data_ptr<int64_t>(), numel_per_slot);
       }));
 }
 
