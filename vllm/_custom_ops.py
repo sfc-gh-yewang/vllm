@@ -1234,8 +1234,8 @@ def copy_blocks(key_caches: list[torch.Tensor],
 
 
 def copy_slots(key_caches: list[torch.Tensor],
-                value_caches: list[torch.Tensor],
-                slot_mapping: torch.Tensor) -> None:
+               value_caches: list[torch.Tensor],
+               slot_mapping: torch.Tensor) -> None:
     torch.ops._C_cache_ops.copy_slots(key_caches, value_caches, slot_mapping)
 
 

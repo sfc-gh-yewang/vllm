@@ -1136,7 +1136,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                             tolist())
                         last_accepted_idx.append(self.single_spec_length +
                                                  accepted_tokens_1 - 1)
-                        # TODO: update the slot_mapping to make sure the kv cache is updated correctly to be used in the next iteration.
+                        # TODO: update the slot_mapping to make sure the kv cache is updated 
+                        # correctly to be used in the next iteration.
+                        from vllm import _custom_ops as ops
+                        from typing import List
+                        def copy_blocks(
+                            kv_caches: List[torch.Tensor],
+                            src_to_dests: torch.Tensor,
+                        ) -> None:
+                            key_caches = [kv_cache[0] for kv_cache in kv_caches]
+                            value_caches = [kv_cache[1] for kv_cache in kv_caches]
+                            ops.copy_blocks(key_caches, value_caches, src_to_dests)
+
                 else:
                     accepted_tokens = token_compare(draft_token_ids_per_req,
                                                     scorer_token_ids_per_req)
