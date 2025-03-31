@@ -279,7 +279,7 @@ class FlashInferMetadataBuilder:
                                 self.runner.device)
                     all_trues = torch.full((qo_len[i], kv_len[i] - qo_len[i]), True,
                                             device=self.runner.device)
-                    mask_i = torch.cat(all_trues, tree_mask, dim=1)
+                    mask_i = torch.cat((all_trues, tree_mask), dim=1)
                 else:
                     mask_i = torch.tril(
                         torch.full((qo_len[i], kv_len[i]),

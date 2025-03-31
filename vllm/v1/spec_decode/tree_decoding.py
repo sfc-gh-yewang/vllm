@@ -63,7 +63,6 @@ class SequenceTree:
 
         paths = [self.__get_indices(seq) for seq in self._seqs]
         for path in paths:
-            print("path", path)
             for i in range(1, len(path)):
                 for j in range(i + 1, len(path)):
                     mask[path[j], path[i]] = True

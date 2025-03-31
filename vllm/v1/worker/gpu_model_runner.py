@@ -262,8 +262,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                         pin_memory=self.pin_memory)
         self.seq_lens_np = self.seq_lens_cpu.numpy()
 
-        self.last_spec_reqs_num = 0
-        self.combined_spec_length = 0
+        self.seq_tree = []
+        self.tree_mask_host = []
 
     def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
         """Update the cached states and the persistent batch with the scheduler
@@ -1167,8 +1167,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 num_sampled_tokens, 0) - num_sampled_tokens
             previous_hidden_states = sample_hidden_states[hidden_states_idx]
 
-            valid_sampled_token_ids = self.rejection_sampler.parse_output(
-                sampled_token_ids, self.input_batch.vocab_size)
+            valid_sampled_token_ids = sampled_token_ids
 
         if not self.use_spec_decode:
             spec_token_ids = None
@@ -1189,8 +1188,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
             for idx in range(len(spec_token_ids_ngram)):
                 st = SequenceTree()
-                st.add_sequence(spec_token_ids_ngram[idx])
-                st.add_sequence(spec_token_ids_mlp[idx])
+                st.add_sequence(valid_sampled_token_ids[idx][-1] + spec_token_ids_ngram[idx])
+                st.add_sequence(valid_sampled_token_ids[idx][-1] + spec_token_ids_mlp[idx])
                 flattened_seq, mask_host = st.flat()
                 self.seq_tree.append(st)
                 spec_token_ids.append(flattened_seq)
