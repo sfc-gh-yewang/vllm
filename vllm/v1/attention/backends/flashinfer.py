@@ -272,25 +272,21 @@ class FlashInferMetadataBuilder:
                        attn_metadata.paged_kv_indptr[:-1] - 1) +
                       attn_metadata.paged_kv_last_page_len).cpu().tolist()
             batch_size = len(qo_len)
+            tree_mask_num = len(self.runner.tree_mask_host)
             for i in range(batch_size):
-                mask_i = torch.tril(
-                    torch.full((qo_len[i], kv_len[i]),
-                               True,
-                               device=self.runner.device),
-                    diagonal=(kv_len[i] - qo_len[i]),
-                )
-                # None-optimized code for generating the following mask.
-                #  ... 1  1  1  1  0  0  0  0  0
-                #  ... 1  1  1  1  1  0  0  0  0
-                #  ... 1  1  1  1  1  1  0  0  0
-                #  ... 1  1  1  0  0  0  1  0  0
-                #  ... 1  1  1  0  0  0  1  1  0
-                #  ... 1  1  1  0  0  0  1  1  1
-                if i < self.runner.last_spec_reqs_num and qo_len[
-                        i] == self.runner.combined_spec_length:
-                    half_qo_len = qo_len[i] // 2
-                    qk_diff = kv_len[i] - qo_len[i]
-                    mask_i[half_qo_len:, qk_diff:qk_diff + half_qo_len] = False
+                if (i < tree_mask_num):
+                    tree_mask = self.runner.tree_mask_host[i].to(
+                                self.runner.device)
+                    all_trues = torch.full((qo_len[i], kv_len[i] - qo_len[i]), True,
+                                            device=self.runner.device)
+                    mask_i = torch.cat(all_trues, tree_mask, dim=1)
+                else:
+                    mask_i = torch.tril(
+                        torch.full((qo_len[i], kv_len[i]),
+                                   True,
+                                   device=self.runner.device),
+                        diagonal=(kv_len[i] - qo_len[i]),
+                    )
 
                 mask_arr.append(mask_i.flatten())
             custom_mask = torch.cat(mask_arr, dim=0)

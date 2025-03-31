@@ -33,7 +33,7 @@ class SequenceTree:
             current_level_nodes = current_level_nodes[number]['children']
         return indices
 
-    def verify(self, sequence: List[int]) -> List[int]:
+    def verify(self, sequence: List[int]) -> tuple[List[int], List[int]]:
         assert self._flattened_sequence is not None, "Please call flat() before calling verify()"
         assert len(sequence) == len(
             self._flattened_sequence
@@ -44,13 +44,15 @@ class SequenceTree:
         current_level_nodes = self.root[list(self.root.keys())[0]]
         seq_idx = 0
         indices = [seq_idx]
+        values = [sequence[seq_idx]]
         while sequence[seq_idx] in current_level_nodes['children']:
             current_level_nodes = current_level_nodes['children'][
                 sequence[seq_idx]]
             seq_idx = current_level_nodes['index']
             indices.append(seq_idx)
+            values.append(sequence[seq_idx])
 
-        return indices
+        return values, indices
 
     def __create_tree_mask(self) -> torch.Tensor:
         assert self._flattened_sequence is not None, "Please call flat() before calling _create_tree_mask()"
@@ -68,7 +70,7 @@ class SequenceTree:
 
         return mask
 
-    def flat(self) -> List[int]:
+    def flat(self) -> tuple[List[int], torch.Tensor]:
         self._flattened_sequence = []
         queue = deque()
         current_index = 0
@@ -100,24 +102,3 @@ class SequenceTree:
             return json.dumps(self.root, indent=2, default=default_serializer)
         except TypeError as e:
             return f"Could not serialize tree structure: {e}\nRoot dictionary: {self.root}"
-
-
-# if __name__ == "__main__":
-#     tree = SequenceTree()
-
-#     tree.add_sequence([16, 13, 578, 7301])
-#     tree.add_sequence([16, 13, 578, 374])
-#     tree.add_sequence([16, 13, 3639])
-#     tree.add_sequence([16, 320, 791])
-
-#     print(tree)
-
-#     flattened_sequence, mask = tree.flat()
-#     print(f"\nFlattened Sequence: {flattened_sequence}")
-#     print(f"Mask:")
-#     print(mask.to(torch.int))
-
-#     scorer_ids = [13, 578, 321, 374, 28, 19, 250, 55]
-#     res = tree.verify(scorer_ids)
-#     print(f"\nScorer IDs: {scorer_ids}")
-#     print(f"Verified Indices: {res}")

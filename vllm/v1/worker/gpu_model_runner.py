@@ -1076,18 +1076,19 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             output_token_ids: list[list[int]] = []
             last_accepted_idx: list[int] = []
 
-            def token_compare(draft, scorer):
-                i = 0
-                j = 0
-                while i < self.single_spec_length:
-                    if draft_token_ids_per_req[i] == scorer_token_ids_per_req[
-                            j]:
-                        i += 1
-                        j += 1
-                    else:
-                        break
-                return j + 1
+            # def token_compare(draft, scorer):
+            #     i = 0
+            #     j = 0
+            #     while i < self.single_spec_length:
+            #         if draft_token_ids_per_req[i] == scorer_token_ids_per_req[
+            #                 j]:
+            #             i += 1
+            #             j += 1
+            #         else:
+            #             break
+            #     return j + 1
 
+            j = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
                 draft_token_ids_per_req = draft_token_ids_np[
                     processed_draft_tokens:processed_draft_tokens +
@@ -1101,59 +1102,25 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 if num_draft_token == 1:
                     output_token_ids.append(scorer_token_ids_per_req.tolist())
                     last_accepted_idx.append(0)
-                elif num_draft_token == self.combined_spec_length + 1:
-                    # draft [10, 25, 33, 10, 64, 77] => [10, 25, 33] and [10, 64, 77]
-                    # [x, 10, 25, 33, 10, 64, 77]
-                    # scorer [10, 25, 55, 36, 25,  8, 91] => [10, 25, 55, 36] and [10, 25,  8, 91]
-                    # first part [10, 25, 55, 36] matches more so use it
-                    # if the second part matches more then we need to carefully update
-                    # the last_accepted_idx which is used to obtain the right hidden states
-                    # and swap the slot_mapping to make sure the kv cache is updated correctly
-                    # to be used in the next iteration.
-                    draft_token_ids_per_req_0 = draft_token_ids_per_req[:self.
-                                                                        single_spec_length]
-                    scorer_token_ids_per_req_0 = scorer_token_ids_per_req[:self
-                                                                          .
-                                                                          single_spec_length
-                                                                          + 1]
-                    accepted_tokens_0 = token_compare(
-                        draft_token_ids_per_req_0, scorer_token_ids_per_req_0)
-                    draft_token_ids_per_req_1 = draft_token_ids_per_req[
-                        self.single_spec_length:]
-                    scorer_token_ids_per_req_1 = scorer_token_ids_per_req[
-                        0] + scorer_token_ids_per_req[self.single_spec_length +
-                                                      1:]
-                    accepted_tokens_1 = token_compare(
-                        draft_token_ids_per_req_1, scorer_token_ids_per_req_1)
-                    if accepted_tokens_0 >= accepted_tokens_1:
-                        output_token_ids.append(
-                            scorer_token_ids_per_req_0[:accepted_tokens_0].
-                            tolist())
-                        last_accepted_idx.append(accepted_tokens_0 - 1)
-                    else:
-                        output_token_ids.append(
-                            scorer_token_ids_per_req_1[:accepted_tokens_1].
-                            tolist())
-                        last_accepted_idx.append(self.single_spec_length +
-                                                 accepted_tokens_1 - 1)
-                        # TODO: update the slot_mapping to make sure the kv cache is updated 
-                        # correctly to be used in the next iteration.
-                        from vllm import _custom_ops as ops
-                        from typing import List
-                        def copy_blocks(
-                            kv_caches: List[torch.Tensor],
-                            src_to_dests: torch.Tensor,
-                        ) -> None:
-                            key_caches = [kv_cache[0] for kv_cache in kv_caches]
-                            value_caches = [kv_cache[1] for kv_cache in kv_caches]
-                            ops.copy_blocks(key_caches, value_caches, src_to_dests)
-
                 else:
-                    accepted_tokens = token_compare(draft_token_ids_per_req,
-                                                    scorer_token_ids_per_req)
-                    output_token_ids.append(
-                        scorer_token_ids_per_req[:accepted_tokens].tolist())
-                    last_accepted_idx.append(accepted_tokens - 1)
+                    assert(j < len(self.seq_tree))
+                    accepted_tokens, accepted_idx = self.seq_tree[j].verify(
+                        scorer_token_ids_per_req.tolist()
+                    )
+                    output_token_ids.append(accepted_tokens)
+                    last_accepted_idx.append(accepted_idx[-1])
+                    # TODO: update the slot_mapping to make sure the kv cache is updated 
+                    # correctly to be used in the next iteration.
+                    from vllm import _custom_ops as ops
+                    from typing import List
+                    def copy_blocks(
+                        kv_caches: List[torch.Tensor],
+                        src_to_dests: torch.Tensor,
+                    ) -> None:
+                        key_caches = [kv_cache[0] for kv_cache in kv_caches]
+                        value_caches = [kv_cache[1] for kv_cache in kv_caches]
+                        ops.copy_blocks(key_caches, value_caches, src_to_dests)
+
 
             sampler_output.sampled_token_ids = output_token_ids
 
@@ -1214,27 +1181,20 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 valid_sampled_token_ids, sampling_metadata,
                 previous_hidden_states)
             # # concatenate the two draft token ids
-            spec_token_ids = [
-                spec_token_ids_mlp[i] + spec_token_ids_ngram[i]
-                for i in range(len(spec_token_ids_ngram))
-            ]
-            # if ngram results is not empty we can build the tree mask like this:
-            # assume both spec lengths are 3
-            #  1  0  0  0  0  0
-            #  1  1  0  0  0  0
-            #  1  1  1  0  0  0
-            #  0  0  0  1  0  0
-            #  0  0  0  1  1  0
-            #  0  0  0  1  1  1
-            # Since spec decoding requests are put in the front of the batch
-            # we can simply apply the above style mask if the q_length is 6
-            # and within the range of the spec decoding requests
-            self.last_spec_reqs_num = len(spec_token_ids_mlp)
-            self.single_spec_length = len(spec_token_ids_mlp[0])
-            self.combined_spec_length = 2 * self.single_spec_length
+            self.seq_tree = []
+            spec_token_ids = []
+            self.tree_mask_host = []
+            
+            from vllm.v1.spec_decode.tree_decoding import SequenceTree
 
-            # bugbug for testing
-            # spec_token_ids = spec_token_ids_mlp
+            for idx in range(len(spec_token_ids_ngram)):
+                st = SequenceTree()
+                st.add_sequence(spec_token_ids_ngram[idx])
+                st.add_sequence(spec_token_ids_mlp[idx])
+                flattened_seq, mask_host = st.flat()
+                self.seq_tree.append(st)
+                spec_token_ids.append(flattened_seq)
+                self.tree_mask_host.append(mask_host)
             # -----------------------------------------------------------------
 
             # -----------------------------------------------------------------
