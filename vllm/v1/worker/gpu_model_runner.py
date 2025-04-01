@@ -52,7 +52,10 @@ else:
 
 logger = init_logger(__name__)
 
-
+def print0(*args, **kwargs):
+    from vllm.distributed.parallel_state import get_tp_group
+    if get_tp_group().is_first_rank:
+        print(*args, **kwargs)
 class GPUModelRunner(LoRAModelRunnerMixin):
 
     def __init__(
@@ -489,10 +492,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if req_id in scheduler_output.scheduled_spec_decode_tree_masks:
                 self.tree_mask_host.append(
                     scheduler_output.scheduled_spec_decode_tree_masks[req_id])
-
-        # from vllm.distributed.parallel_state import get_tp_group
-        # if get_tp_group().is_first_rank:
-        #     print("num_scheduled_tokens", num_scheduled_tokens)
 
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
@@ -1092,7 +1091,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #         else:
             #             break
             #     return j + 1
-
+            print0("1094")
             batch_id = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
                 slot_mapping_offset = processed_scorer_tokens
@@ -1109,11 +1108,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     assert (batch_id < len(self.seq_tree))
                     accepted_tokens, accepted_idx = self.seq_tree[
                         batch_id].verify(scorer_token_ids_per_req)
-
-                    # from vllm.distributed.parallel_state import get_tp_group
-                    # if get_tp_group().is_first_rank:
-                    #     print("accepted_tokens", accepted_tokens,
-                    #           "accepted_idx", accepted_idx)
 
                     output_token_ids.append(accepted_tokens)
 
@@ -1148,6 +1142,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                             ])
 
                     if len(src_to_dsts_np) > 0:
+                        print0("copy slots: ", src_to_dsts_np)
                         copy_slots(
                             self.kv_caches,
                             torch.tensor(src_to_dsts_np).to(torch.long).to(
@@ -1156,7 +1151,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 batch_id += 1
 
             sampler_output.sampled_token_ids = output_token_ids
-
+        print0("1153")
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
         for i, generator in self.input_batch.generators.items():
@@ -1181,7 +1176,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             hidden_states,
             scheduler_output,
         )
-
+        print0("1178")
         # Get the valid generated tokens.
         previous_hidden_states = None
         sampled_token_ids = sampler_output.sampled_token_ids
@@ -1189,15 +1184,17 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             valid_sampled_token_ids = sampled_token_ids.tolist()
             previous_hidden_states = sample_hidden_states
         else:
-            last_accepted_idx = torch.tensor(
+            print0("last_accepted_idx: ", last_accepted_idx)
+            last_accepted_idx_d = torch.tensor(
                 last_accepted_idx, device=sample_hidden_states.device)
+            print0("last_accepted_idx_d: ", last_accepted_idx_d)
             num_sampled_tokens = np.array(
                 spec_decode_metadata.num_draft_tokens)
-            num_sampled_tokens = torch.tensor(
+            num_sampled_tokens_d = torch.tensor(
                 num_sampled_tokens, device=sample_hidden_states.device) + 1
-            hidden_states_idx = last_accepted_idx + torch.cumsum(
-                num_sampled_tokens, 0) - num_sampled_tokens
-            previous_hidden_states = sample_hidden_states[hidden_states_idx]
+            hidden_states_idx_d = last_accepted_idx_d + torch.cumsum(
+                num_sampled_tokens_d, 0) - num_sampled_tokens_d
+            previous_hidden_states = sample_hidden_states[hidden_states_idx_d]
 
             valid_sampled_token_ids = sampled_token_ids
 
@@ -1222,9 +1219,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             for idx in range(len(spec_token_ids_ngram)):
                 st = SequenceTree()
                 last_token = valid_sampled_token_ids[idx][-1]
-                #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
+                st.add_sequence([last_token] + spec_token_ids_ngram[idx])
                 st.add_sequence([last_token] + spec_token_ids_mlp[idx])
+                print0("ngram candidate: ", [last_token] + spec_token_ids_ngram[idx])
+                print0("mlp candidate: ", [last_token] + spec_token_ids_mlp[idx])
                 flattened_seq, mask_host = st.flat()
+                print0("final candidate: ", flattened_seq)
+                print0("final mask_host: ")
+                print0(mask_host)
                 self.seq_tree.append(st)
                 spec_token_ids.append(flattened_seq[1:])
                 self.tree_mask_host.append(mask_host)
@@ -1246,10 +1248,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #     for i in range(len(spec_token_ids_mlp))
             # ]
             # -----------------------------------------------------------------
-            # from vllm.distributed.parallel_state import get_tp_group
-            # if get_tp_group().is_first_rank:
-            #     print("spec_token_ids", spec_token_ids)
-            #     print("valid_sampled_token_ids", valid_sampled_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -1314,11 +1312,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             end_idx = start_idx + num_sampled_ids
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
-
-        # from vllm.distributed.parallel_state import get_tp_group
-        # if get_tp_group().is_first_rank:
-        #      print("MLP: last_tokens", last_tokens)
-        #      print("MLP: previous_hidden_states", previous_hidden_states.shape)
 
         drafter_output = self.mlp_drafter.propose(
             last_tokens,
