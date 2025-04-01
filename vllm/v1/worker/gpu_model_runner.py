@@ -1133,10 +1133,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                 self.slot_mapping_np[slot_mapping_offset +
                                                      dst_idx],
                             ])
-                    copy_slots(
-                        self.kv_caches,
-                        torch.tensor(src_to_dsts_np).to(torch.long).to(
-                            self.device))
+
+                    if len(src_to_dsts_np) > 0:
+                        copy_slots(
+                            self.kv_caches,
+                            torch.tensor(src_to_dsts_np).to(torch.long).to(
+                                self.device))
 
                 batch_id += 1
 
@@ -1199,7 +1201,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 previous_hidden_states)
             # # concatenate the two draft token ids
             self.seq_tree = []
-            spec_token_ids = []
+            spec_token_ids : list[list[int]] = []
             self.tree_mask_host = []
 
             from vllm.v1.spec_decode.tree_decoding import SequenceTree
@@ -1232,10 +1234,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # ]
             # -----------------------------------------------------------------
 
-            # from vllm.distributed.parallel_state import get_tp_group
-            # if get_tp_group().is_first_rank:
-            #     print("spec_token_ids_ngram", spec_token_ids_ngram)
-            #     print("spec_token_ids", spec_token_ids)
+            from vllm.distributed.parallel_state import get_tp_group
+            if get_tp_group().is_first_rank:
+                print("spec_token_ids", spec_token_ids)
+                print("sampled_token_ids", sampled_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
