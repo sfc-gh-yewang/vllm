@@ -147,6 +147,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Lazy initialization
         # self.model: nn.Module  # Set after load_model
         self.kv_caches: list[torch.Tensor] = []
+        self.key_caches: list[torch.Tensor] = None
+        self.value_caches: list[torch.Tensor] = None
         # req_id -> (input_id -> encoder_output)
         self.encoder_cache: dict[str, dict[int, torch.Tensor]] = {}
 
@@ -1108,7 +1110,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     assert (batch_id < len(self.seq_tree))
                     accepted_tokens, accepted_idx = self.seq_tree[
                         batch_id].verify(scorer_token_ids_per_req)
-
+                    print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
                     output_token_ids.append(accepted_tokens)
 
                     # Update last accepted index to make sure in the next round
@@ -1121,32 +1123,28 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     from typing import List
 
                     def copy_slots(
-                        kv_caches: List[torch.Tensor],
                         src_to_dests: torch.Tensor,
                     ) -> None:
-                        key_caches = [kv_cache[0] for kv_cache in kv_caches]
-                        value_caches = [kv_cache[1] for kv_cache in kv_caches]
-                        ops.copy_slots(key_caches, value_caches, src_to_dests)
+                        if self.key_caches is None and self.value_caches is None:
+                            self.key_caches = [kv_cache[0] for kv_cache in self.kv_caches]
+                            self.value_caches = [kv_cache[1] for kv_cache in self.kv_caches]
+                        ops.copy_slots(self.key_caches, self.value_caches, src_to_dests)
 
                     # Check if there's a need to copy the slots over
                     dst_accepted_idx = np.arange(len(accepted_idx))
-                    src_to_dsts_np = []
+                    print0("slot_mapping: ", self.slot_mapping_np[:64])
                     for src_idx, dst_idx in zip(accepted_idx,
                                                 dst_accepted_idx):
                         if (src_idx != dst_idx):
-                            src_to_dsts_np.extend([
+                            src_to_dst_np = [
                                 self.slot_mapping_np[slot_mapping_offset +
                                                      src_idx],
                                 self.slot_mapping_np[slot_mapping_offset +
-                                                     dst_idx],
-                            ])
-
-                    if len(src_to_dsts_np) > 0:
-                        print0("copy slots: ", src_to_dsts_np)
-                        copy_slots(
-                            self.kv_caches,
-                            torch.tensor(src_to_dsts_np).to(torch.long).to(
-                                self.device))
+                                                     dst_idx]]
+                            print0("copy slots: ", src_to_dst_np)
+                            src_to_dst_d = torch.tensor(src_to_dst_np).to(
+                                torch.long).to(self.device)
+                            copy_slots(src_to_dst_d)
 
                 batch_id += 1
 
