@@ -135,6 +135,8 @@ class Scheduler:
         encoder_budget = self.max_num_encoder_input_tokens
         # Spec decode-related.
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
+        import torch
+        scheduled_spec_decode_tree_masks: dict[str, list[torch.tensor]] = {}
 
         # For logging.
         scheduled_timestamp = time.monotonic()
@@ -222,6 +224,8 @@ class Scheduler:
                     del request.spec_token_ids[num_scheduled_spec_tokens:]
                     scheduled_spec_decode_tokens[request.request_id] = (
                         request.spec_token_ids)
+                    scheduled_spec_decode_tree_masks[request.request_id] = (
+                        request.spec_tree_mask)
 
             # Encoder-related.
             if encoder_inputs_to_schedule:
@@ -411,6 +415,8 @@ class Scheduler:
             num_scheduled_tokens=num_scheduled_tokens,
             total_num_scheduled_tokens=total_num_scheduled_tokens,
             scheduled_spec_decode_tokens=scheduled_spec_decode_tokens,
+            scheduled_spec_decode_tree_masks=(
+                scheduled_spec_decode_tree_masks),
             scheduled_encoder_inputs=scheduled_encoder_inputs,
             num_common_prefix_blocks=num_common_prefix_blocks,
             # finished_req_ids is an existing state in the scheduler,
@@ -531,6 +537,7 @@ class Scheduler:
     ) -> EngineCoreOutputs:
         sampled_token_ids = model_runner_output.sampled_token_ids
         spec_token_ids = model_runner_output.spec_token_ids
+        spec_tree_masks = model_runner_output.spec_tree_masks
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
         num_scheduled_tokens = scheduler_output.num_scheduled_tokens
@@ -590,6 +597,7 @@ class Scheduler:
             # Add newly generated spec token ids to the request.
             if spec_token_ids is not None:
                 request.spec_token_ids = spec_token_ids[req_index]
+                request.spec_tree_mask = spec_tree_masks[req_index]
 
             stopped = False
             new_logprobs = None

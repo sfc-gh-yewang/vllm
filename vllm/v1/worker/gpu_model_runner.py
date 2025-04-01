@@ -606,6 +606,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             spec_decode_metadata = self._calc_spec_decode_metadata(
                 num_draft_tokens, cu_num_tokens)
             logits_indices = spec_decode_metadata.logits_indices
+            self.tree_mask_host = scheduler_output.scheduled_spec_decode_tree_masks
 
         # Hot-Swap lora model
         if self.lora_config:
@@ -1244,6 +1245,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             req_id_to_index=self.input_batch.req_id_to_index,
             sampled_token_ids=valid_sampled_token_ids,
             spec_token_ids=spec_token_ids,
+            spec_tree_masks=self.tree_mask_host,
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
         )

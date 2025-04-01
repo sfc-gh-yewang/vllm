@@ -53,6 +53,8 @@ class Request:
         self._output_token_ids: list[int] = []
         self._all_token_ids: list[int] = self.prompt_token_ids.copy()
         self.spec_token_ids: list[int] = []
+        import torch
+        self.spec_tree_mask: Optional[torch.Tensor] = None
         self.num_computed_tokens = 0
 
         # Multi-modal related

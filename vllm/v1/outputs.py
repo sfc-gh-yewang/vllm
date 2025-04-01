@@ -69,6 +69,8 @@ class ModelRunnerOutput:
 
     # num_reqs x num_spec_tokens
     spec_token_ids: Optional[list[list[int]]]
+    import torch
+    spec_tree_masks: Optional[list[torch.Tensor]]
 
     # [num_reqs, max_num_logprobs + 1]
     # [num_reqs, max_num_logprobs + 1]

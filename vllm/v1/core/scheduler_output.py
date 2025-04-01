@@ -101,6 +101,8 @@ class SchedulerOutput:
     # If a request does not have any spec decode tokens, it will not be
     # included in the dictionary.
     scheduled_spec_decode_tokens: dict[str, list[int]]
+    import torch
+    scheduled_spec_decode_tree_masks: Optional[dict[str, torch.Tensor]]
     # req_id -> encoder input indices that need processing.
     # E.g., if a request has [0, 1], it could mean the vision encoder needs
     # to process that the request's 0-th and 1-th images in the current step.
