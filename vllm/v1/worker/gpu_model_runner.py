@@ -1188,11 +1188,12 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
             for idx in range(len(spec_token_ids_ngram)):
                 st = SequenceTree()
-                st.add_sequence(valid_sampled_token_ids[idx][-1] + spec_token_ids_ngram[idx])
-                st.add_sequence(valid_sampled_token_ids[idx][-1] + spec_token_ids_mlp[idx])
+                last_token = valid_sampled_token_ids[idx][-1]
+                st.add_sequence([last_token] + spec_token_ids_ngram[idx])
+                st.add_sequence([last_token] + spec_token_ids_mlp[idx])
                 flattened_seq, mask_host = st.flat()
                 self.seq_tree.append(st)
-                spec_token_ids.append(flattened_seq)
+                spec_token_ids.append(flattened_seq[1:])
                 self.tree_mask_host.append(mask_host)
             # -----------------------------------------------------------------
 
