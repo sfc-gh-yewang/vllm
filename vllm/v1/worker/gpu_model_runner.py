@@ -1103,6 +1103,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     assert (batch_id < len(self.seq_tree))
                     accepted_tokens, accepted_idx = self.seq_tree[
                         batch_id].verify(scorer_token_ids_per_req)
+
+                    from vllm.distributed.parallel_state import get_tp_group
+                    if get_tp_group().is_first_rank:
+                         print("accepted_tokens", accepted_tokens, "accepted_idx", accepted_idx)
+
                     output_token_ids.append(accepted_tokens)
 
                     # Update last accepted index to make sure in the next round
@@ -1234,11 +1239,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #     for i in range(len(spec_token_ids_mlp))
             # ]
             # -----------------------------------------------------------------
-            from vllm.distributed.parallel_state import get_tp_group
-            if get_tp_group().is_first_rank:
-                 print("spec_token_ids", spec_token_ids)
-                 print("sampled_token_ids", sampled_token_ids)
-                 print("valid_sampled_token_ids", valid_sampled_token_ids)
+            # from vllm.distributed.parallel_state import get_tp_group
+            # if get_tp_group().is_first_rank:
+            #      print("spec_token_ids", spec_token_ids)
+            #      print("sampled_token_ids", sampled_token_ids)
+            #      print("valid_sampled_token_ids", valid_sampled_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -1304,10 +1309,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
-        from vllm.distributed.parallel_state import get_tp_group
-        if get_tp_group().is_first_rank:
-             print("MLP: last_tokens", last_tokens)
-             print("MLP: previous_hidden_states", previous_hidden_states.shape)
+        # from vllm.distributed.parallel_state import get_tp_group
+        # if get_tp_group().is_first_rank:
+        #      print("MLP: last_tokens", last_tokens)
+        #      print("MLP: previous_hidden_states", previous_hidden_states.shape)
 
         drafter_output = self.mlp_drafter.propose(
             last_tokens,

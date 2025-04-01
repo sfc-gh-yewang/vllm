@@ -89,6 +89,7 @@ EMPTY_MODEL_RUNNER_OUTPUT = ModelRunnerOutput(
     req_id_to_index={},
     sampled_token_ids=[],
     spec_token_ids=None,
+    spec_tree_masks=None,
     logprobs=None,
     prompt_logprobs_dict={},
 )
