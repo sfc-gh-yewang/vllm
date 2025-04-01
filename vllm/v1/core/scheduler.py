@@ -136,7 +136,7 @@ class Scheduler:
         # Spec decode-related.
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
         import torch
-        scheduled_spec_decode_tree_masks: dict[str, list[torch.tensor]] = {}
+        scheduled_spec_decode_tree_masks: dict[str, torch.tensor] = {}
 
         # For logging.
         scheduled_timestamp = time.monotonic()

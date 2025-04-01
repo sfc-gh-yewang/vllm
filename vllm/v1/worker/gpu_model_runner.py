@@ -476,6 +476,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # This way, we can overlap the copy with the following CPU operations.
         self.input_batch.block_table.commit(num_reqs)
 
+        self.tree_mask_host = []
         # Get the number of scheduled tokens for each request.
         # TODO: The Python loop can be slow. Optimize.
         num_scheduled_tokens = np.empty(num_reqs, dtype=np.int32)
@@ -485,6 +486,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             num_scheduled_tokens[i] = num_tokens
             max_num_scheduled_tokens = max(max_num_scheduled_tokens,
                                            num_tokens)
+            if req_id in scheduler_output.scheduled_spec_decode_tree_masks:
+                self.tree_mask_host.append(
+                    scheduler_output.scheduled_spec_decode_tree_masks[req_id])
+
+        # from vllm.distributed.parallel_state import get_tp_group
+        # if get_tp_group().is_first_rank:
+        #     print("num_scheduled_tokens", num_scheduled_tokens)
 
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
@@ -584,7 +592,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         use_spec_decode = len(
             scheduler_output.scheduled_spec_decode_tokens) > 0
 
-        num_sampled_tokens = None
         if not use_spec_decode:
             # NOTE(woosuk): Due to chunked prefills, the batch may contain
             # partial requests. While we should not sample any token
@@ -606,7 +613,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             spec_decode_metadata = self._calc_spec_decode_metadata(
                 num_draft_tokens, cu_num_tokens)
             logits_indices = spec_decode_metadata.logits_indices
-            self.tree_mask_host = scheduler_output.scheduled_spec_decode_tree_masks
 
         # Hot-Swap lora model
         if self.lora_config:
@@ -1104,9 +1110,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     accepted_tokens, accepted_idx = self.seq_tree[
                         batch_id].verify(scorer_token_ids_per_req)
 
-                    from vllm.distributed.parallel_state import get_tp_group
-                    if get_tp_group().is_first_rank:
-                         print("accepted_tokens", accepted_tokens, "accepted_idx", accepted_idx)
+                    # from vllm.distributed.parallel_state import get_tp_group
+                    # if get_tp_group().is_first_rank:
+                    #     print("accepted_tokens", accepted_tokens,
+                    #           "accepted_idx", accepted_idx)
 
                     output_token_ids.append(accepted_tokens)
 
@@ -1215,7 +1222,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             for idx in range(len(spec_token_ids_ngram)):
                 st = SequenceTree()
                 last_token = valid_sampled_token_ids[idx][-1]
-                st.add_sequence([last_token] + spec_token_ids_ngram[idx])
+                #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
                 st.add_sequence([last_token] + spec_token_ids_mlp[idx])
                 flattened_seq, mask_host = st.flat()
                 self.seq_tree.append(st)
@@ -1241,9 +1248,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # -----------------------------------------------------------------
             # from vllm.distributed.parallel_state import get_tp_group
             # if get_tp_group().is_first_rank:
-            #      print("spec_token_ids", spec_token_ids)
-            #      print("sampled_token_ids", sampled_token_ids)
-            #      print("valid_sampled_token_ids", valid_sampled_token_ids)
+            #     print("spec_token_ids", spec_token_ids)
+            #     print("valid_sampled_token_ids", valid_sampled_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
