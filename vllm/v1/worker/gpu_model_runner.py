@@ -1088,11 +1088,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #             break
             #     return j + 1
 
-            j = 0
+            batch_id = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
-                draft_token_ids_per_req = draft_token_ids_np[
-                    processed_draft_tokens:processed_draft_tokens +
-                    num_draft_token]
                 processed_draft_tokens += num_draft_token
                 num_draft_token += 1
                 scorer_token_ids_per_req = scorer_token_ids_np[
@@ -1103,24 +1100,41 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     output_token_ids.append(scorer_token_ids_per_req.tolist())
                     last_accepted_idx.append(0)
                 else:
-                    assert(j < len(self.seq_tree))
-                    accepted_tokens, accepted_idx = self.seq_tree[j].verify(
-                        scorer_token_ids_per_req.tolist()
+                    assert(batch_id < len(self.seq_tree))
+                    accepted_tokens, accepted_idx = self.seq_tree[batch_id].verify(
+                        scorer_token_ids_per_req
                     )
                     output_token_ids.append(accepted_tokens)
+
+                    # Update last accepted index to make sure in the next round
+                    # the mlp proposer gets the correct hidden states
                     last_accepted_idx.append(accepted_idx[-1])
-                    # TODO: update the slot_mapping to make sure the kv cache is updated 
+
+                    # Update the slot_mapping to make sure the kv cache is updated 
                     # correctly to be used in the next iteration.
                     from vllm import _custom_ops as ops
                     from typing import List
-                    def copy_blocks(
+                    def copy_slots(
                         kv_caches: List[torch.Tensor],
                         src_to_dests: torch.Tensor,
                     ) -> None:
                         key_caches = [kv_cache[0] for kv_cache in kv_caches]
                         value_caches = [kv_cache[1] for kv_cache in kv_caches]
-                        ops.copy_blocks(key_caches, value_caches, src_to_dests)
+                        ops.copy_slots(key_caches, value_caches, src_to_dests)
 
+                    # Check if there's a need to copy the slots over
+                    slot_mapping_offset = processed_scorer_tokens
+                    dst_accepted_idx = np.arange(len(accepted_idx))
+                    src_to_dsts_np = []
+                    for src_idx, dst_idx in zip(accepted_idx, dst_accepted_idx):
+                        if (src_idx != dst_idx):
+                            src_to_dsts_np.extend([
+                                self.slot_mapping_np[slot_mapping_offset + src_idx],
+                                self.slot_mapping_np[slot_mapping_offset + dst_idx],
+                            ])
+                    copy_slots(self.kv_caches, torch.tensor(src_to_dsts_np).to(self.device))
+                    
+                batch_id += 1
 
             sampler_output.sampled_token_ids = output_token_ids
 
