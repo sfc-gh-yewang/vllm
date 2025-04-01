@@ -1068,7 +1068,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
             # Unoptimized
             scorer_token_ids = sampler_output.sampled_token_ids.cpu(
-            ).transpose().tolist()
+            ).transpose(0, 1).tolist()[0]
             processed_draft_tokens = 0
             processed_scorer_tokens = 0
             output_token_ids: list[list[int]] = []
@@ -1096,7 +1096,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     num_draft_token]
                 processed_scorer_tokens += num_draft_token
                 if num_draft_token == 1:
-                    output_token_ids.append(scorer_token_ids_per_req.tolist())
+                    output_token_ids.append(scorer_token_ids_per_req)
                     last_accepted_idx.append(0)
                 else:
                     assert (batch_id < len(self.seq_tree))
@@ -1172,8 +1172,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Get the valid generated tokens.
         previous_hidden_states = None
         sampled_token_ids = sampler_output.sampled_token_ids
-        max_gen_len = max([len(x) for x in sampled_token_ids])
-        if max_gen_len == 1:
+        if spec_decode_metadata is None:
             valid_sampled_token_ids = sampled_token_ids.tolist()
             previous_hidden_states = sample_hidden_states
         else:
@@ -1196,6 +1195,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # Concating the two draft token ids and generate a tree mask
             spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
                 valid_sampled_token_ids, sampling_metadata)
+
             spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
                 valid_sampled_token_ids, sampling_metadata,
                 previous_hidden_states)
@@ -1233,6 +1233,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #     for i in range(len(spec_token_ids_mlp))
             # ]
             # -----------------------------------------------------------------
+            from vllm.distributed.parallel_state import get_tp_group
+            if get_tp_group().is_first_rank:
+                 print("spec_token_ids", spec_token_ids)
+                 print("sampled_token_ids", sampled_token_ids)
+                 print("valid_sampled_token_ids", valid_sampled_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
@@ -1296,6 +1301,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             end_idx = start_idx + num_sampled_ids
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
+
+        from vllm.distributed.parallel_state import get_tp_group
+        if get_tp_group().is_first_rank:
+             print("MLP: last_tokens", last_tokens)
+             print("MLP: previous_hidden_states", previous_hidden_states.shape)
 
         drafter_output = self.mlp_drafter.propose(
             last_tokens,
