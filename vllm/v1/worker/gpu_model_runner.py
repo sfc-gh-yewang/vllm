@@ -1069,8 +1069,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # Unoptimized
             scorer_token_ids_np = np.transpose(
                 sampler_output.sampled_token_ids.cpu().numpy())[0]
-            draft_token_ids_np = spec_decode_metadata.draft_token_ids.cpu(
-            ).numpy()
             processed_draft_tokens = 0
             processed_scorer_tokens = 0
             output_token_ids: list[list[int]] = []
@@ -1090,6 +1088,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
             batch_id = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
+                slot_mapping_offset = processed_scorer_tokens
                 processed_draft_tokens += num_draft_token
                 num_draft_token += 1
                 scorer_token_ids_per_req = scorer_token_ids_np[
@@ -1100,20 +1099,20 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     output_token_ids.append(scorer_token_ids_per_req.tolist())
                     last_accepted_idx.append(0)
                 else:
-                    assert(batch_id < len(self.seq_tree))
-                    accepted_tokens, accepted_idx = self.seq_tree[batch_id].verify(
-                        scorer_token_ids_per_req
-                    )
+                    assert (batch_id < len(self.seq_tree))
+                    accepted_tokens, accepted_idx = self.seq_tree[
+                        batch_id].verify(scorer_token_ids_per_req)
                     output_token_ids.append(accepted_tokens)
 
                     # Update last accepted index to make sure in the next round
                     # the mlp proposer gets the correct hidden states
                     last_accepted_idx.append(accepted_idx[-1])
 
-                    # Update the slot_mapping to make sure the kv cache is updated 
+                    # Update the slot_mapping to make sure the kv cache is updated
                     # correctly to be used in the next iteration.
                     from vllm import _custom_ops as ops
                     from typing import List
+
                     def copy_slots(
                         kv_caches: List[torch.Tensor],
                         src_to_dests: torch.Tensor,
@@ -1123,17 +1122,22 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         ops.copy_slots(key_caches, value_caches, src_to_dests)
 
                     # Check if there's a need to copy the slots over
-                    slot_mapping_offset = processed_scorer_tokens
                     dst_accepted_idx = np.arange(len(accepted_idx))
                     src_to_dsts_np = []
-                    for src_idx, dst_idx in zip(accepted_idx, dst_accepted_idx):
+                    for src_idx, dst_idx in zip(accepted_idx,
+                                                dst_accepted_idx):
                         if (src_idx != dst_idx):
                             src_to_dsts_np.extend([
-                                self.slot_mapping_np[slot_mapping_offset + src_idx],
-                                self.slot_mapping_np[slot_mapping_offset + dst_idx],
+                                self.slot_mapping_np[slot_mapping_offset +
+                                                     src_idx],
+                                self.slot_mapping_np[slot_mapping_offset +
+                                                     dst_idx],
                             ])
-                    copy_slots(self.kv_caches, torch.tensor(src_to_dsts_np).to(self.device))
-                    
+                    copy_slots(
+                        self.kv_caches,
+                        torch.tensor(src_to_dsts_np).to(torch.long).to(
+                            self.device))
+
                 batch_id += 1
 
             sampler_output.sampled_token_ids = output_token_ids
@@ -1187,7 +1191,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             spec_token_ids = None
         else:
             # -----------------------------------------------------------------
-            # (WIP) concating the two draft token ids and generate a tree mask
+            # Concating the two draft token ids and generate a tree mask
             spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
                 valid_sampled_token_ids, sampling_metadata)
             spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
@@ -1197,7 +1201,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.seq_tree = []
             spec_token_ids = []
             self.tree_mask_host = []
-            
+
             from vllm.v1.spec_decode.tree_decoding import SequenceTree
 
             for idx in range(len(spec_token_ids_ngram)):
