@@ -1067,8 +1067,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 sampling_metadata=sampling_metadata,
             )
             # Unoptimized
-            scorer_token_ids_np = np.transpose(
-                sampler_output.sampled_token_ids.cpu().numpy())[0]
+            scorer_token_ids = sampler_output.sampled_token_ids.cpu(
+            ).transpose().tolist()
             processed_draft_tokens = 0
             processed_scorer_tokens = 0
             output_token_ids: list[list[int]] = []
@@ -1091,7 +1091,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 slot_mapping_offset = processed_scorer_tokens
                 processed_draft_tokens += num_draft_token
                 num_draft_token += 1
-                scorer_token_ids_per_req = scorer_token_ids_np[
+                scorer_token_ids_per_req = scorer_token_ids[
                     processed_scorer_tokens:processed_scorer_tokens +
                     num_draft_token]
                 processed_scorer_tokens += num_draft_token
@@ -1201,7 +1201,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 previous_hidden_states)
             # # concatenate the two draft token ids
             self.seq_tree = []
-            spec_token_ids : list[list[int]] = []
+            spec_token_ids: list[list[int]] = []
             self.tree_mask_host = []
 
             from vllm.v1.spec_decode.tree_decoding import SequenceTree
@@ -1233,11 +1233,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #     for i in range(len(spec_token_ids_mlp))
             # ]
             # -----------------------------------------------------------------
-
-            from vllm.distributed.parallel_state import get_tp_group
-            if get_tp_group().is_first_rank:
-                print("spec_token_ids", spec_token_ids)
-                print("sampled_token_ids", sampled_token_ids)
 
         return ModelRunnerOutput(
             req_ids=self.input_batch.req_ids,
