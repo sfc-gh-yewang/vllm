@@ -10,6 +10,7 @@ class SequenceTree:
         self.root: Dict[int, Dict[str, Any]] = {}
         self._flattened_sequence: Optional[List[int]] = None
         self._seqs: List[List[int]] = []
+        self._tree_mask: Optional[torch.Tensor] = None
 
     def add_sequence(self, sequence: List[int]):
         self._seqs.append(sequence)
@@ -20,8 +21,8 @@ class SequenceTree:
                 current_level_nodes[number] = {'children': {}, 'index': None}
             current_level_nodes = current_level_nodes[number]['children']
 
-    def get_sequences(self) -> List[List[int]]:
-        return self._seqs
+    # def __get_sequences(self) -> List[List[int]]:
+    #     return self._seqs
 
     def __get_indices(self, sequence: List[int]) -> List[int]:
         current_level_nodes = self.root
@@ -37,7 +38,7 @@ class SequenceTree:
         assert self._flattened_sequence is not None, "Please call flat() before calling verify()"
         assert len(sequence) == len(
             self._flattened_sequence
-        ), "The sequence to verify must have the same length as the flattened sequence"
+        ), "flattened sequence and input sequence must have the same length"
         assert len(
             self.root.keys()) == 1, "There must be exactly one root node"
 
@@ -68,6 +69,9 @@ class SequenceTree:
                     mask[path[j], path[i]] = True
 
         return mask
+    
+    def mask(self) -> torch.Tensor:
+        return self._tree_mask
 
     def flat(self) -> tuple[List[int], torch.Tensor]:
         self._flattened_sequence = []
@@ -89,7 +93,8 @@ class SequenceTree:
                 child_node_data = children_dict[child_number]
                 queue.append((child_number, child_node_data))
 
-        return self._flattened_sequence, self.__create_tree_mask()
+        self._tree_mask = self.__create_tree_mask()
+        return self._flattened_sequence
 
     def __str__(self) -> str:
         import json

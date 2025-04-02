@@ -275,10 +275,10 @@ class FlashInferMetadataBuilder:
             # from vllm.distributed.parallel_state import get_tp_group
             # if get_tp_group().is_first_rank:
             #     print("qo_len", qo_len)
-            tree_mask_num = len(self.runner.tree_mask_host)
+            tree_mask_num = len(self.runner.seq_trees)
             for i in range(batch_size):
                 if (i < tree_mask_num):
-                    tree_mask = self.runner.tree_mask_host[i].to(
+                    tree_mask = self.runner.seq_trees[i].mask().to(
                                 self.runner.device)
                     # from vllm.distributed.parallel_state import get_tp_group
                     # if get_tp_group().is_first_rank:

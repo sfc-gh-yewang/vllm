@@ -267,8 +267,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                         pin_memory=self.pin_memory)
         self.seq_lens_np = self.seq_lens_cpu.numpy()
 
-        self.seq_tree = []
-        self.tree_mask_host = []
+        self.seq_trees = []
 
     def _update_states(self, scheduler_output: "SchedulerOutput") -> None:
         """Update the cached states and the persistent batch with the scheduler
@@ -481,7 +480,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # This way, we can overlap the copy with the following CPU operations.
         self.input_batch.block_table.commit(num_reqs)
 
-        self.tree_mask_host = []
+        self.seq_trees = []
         # Get the number of scheduled tokens for each request.
         # TODO: The Python loop can be slow. Optimize.
         num_scheduled_tokens = np.empty(num_reqs, dtype=np.int32)
@@ -491,9 +490,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             num_scheduled_tokens[i] = num_tokens
             max_num_scheduled_tokens = max(max_num_scheduled_tokens,
                                            num_tokens)
-            if req_id in scheduler_output.scheduled_spec_decode_tree_masks:
-                self.tree_mask_host.append(
-                    scheduler_output.scheduled_spec_decode_tree_masks[req_id])
+            if req_id in scheduler_output.scheduled_spec_decode_trees:
+                self.seq_trees.append(
+                    scheduler_output.scheduled_spec_decode_trees[req_id])
 
         # Get request indices.
         # E.g., [2, 5, 3] -> [0, 0, 1, 1, 1, 1, 1, 2, 2, 2]
@@ -974,6 +973,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, torch.Tensor]:
+        print0("--------------------execute_model---------------------")
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             # Return empty ModelRunnerOuptut if there's no work to do.
@@ -1094,6 +1094,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #             break
             #     return j + 1
             print0("1094")
+            print0("num_draft_tokens: ", spec_decode_metadata.num_draft_tokens)
             batch_id = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
                 slot_mapping_offset = processed_scorer_tokens
@@ -1102,13 +1103,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 scorer_token_ids_per_req = scorer_token_ids[
                     processed_scorer_tokens:processed_scorer_tokens +
                     num_draft_token]
+                print0("scorer_token_ids_per_req: ", scorer_token_ids_per_req)
                 processed_scorer_tokens += num_draft_token
                 if num_draft_token == 1:
                     output_token_ids.append(scorer_token_ids_per_req)
                     last_accepted_idx.append(0)
                 else:
-                    assert (batch_id < len(self.seq_tree))
-                    accepted_tokens, accepted_idx = self.seq_tree[
+                    assert (batch_id < len(self.seq_trees))
+                    accepted_tokens, accepted_idx = self.seq_trees[
                         batch_id].verify(scorer_token_ids_per_req)
                     print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
                     output_token_ids.append(accepted_tokens)
@@ -1143,7 +1145,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                                      dst_idx]]
                             print0("copy slots: ", src_to_dst_np)
                             src_to_dst_d = torch.tensor(src_to_dst_np).to(
-                                torch.long).to(self.device)
+                                torch.long).to(self.device).reshape(1, 2)
+                            print0("src_to_dst_d: ", src_to_dst_d.shape)
                             copy_slots(src_to_dst_d)
 
                 batch_id += 1
@@ -1208,9 +1211,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 valid_sampled_token_ids, sampling_metadata,
                 previous_hidden_states)
             # # concatenate the two draft token ids
-            self.seq_tree = []
+            seq_trees = []
             spec_token_ids: list[list[int]] = []
-            self.tree_mask_host = []
 
             from vllm.v1.spec_decode.tree_decoding import SequenceTree
 
@@ -1221,13 +1223,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 st.add_sequence([last_token] + spec_token_ids_mlp[idx])
                 print0("ngram candidate: ", [last_token] + spec_token_ids_ngram[idx])
                 print0("mlp candidate: ", [last_token] + spec_token_ids_mlp[idx])
-                flattened_seq, mask_host = st.flat()
+                flattened_seq = st.flat()
                 print0("final candidate: ", flattened_seq)
-                print0("final mask_host: ")
-                print0(mask_host)
-                self.seq_tree.append(st)
+                seq_trees.append(st)
                 spec_token_ids.append(flattened_seq[1:])
-                self.tree_mask_host.append(mask_host)
             # -----------------------------------------------------------------
 
             # -----------------------------------------------------------------
@@ -1252,7 +1251,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             req_id_to_index=self.input_batch.req_id_to_index,
             sampled_token_ids=valid_sampled_token_ids,
             spec_token_ids=spec_token_ids,
-            spec_tree_masks=self.tree_mask_host,
+            spec_trees=seq_trees,    
             logprobs=logprobs_lists,
             prompt_logprobs_dict=prompt_logprobs_dict,
         )

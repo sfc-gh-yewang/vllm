@@ -52,9 +52,11 @@ class Request:
         self.num_prompt_tokens = len(self.prompt_token_ids)
         self._output_token_ids: list[int] = []
         self._all_token_ids: list[int] = self.prompt_token_ids.copy()
+
         self.spec_token_ids: list[int] = []
-        import torch
-        self.spec_tree_mask: Optional[torch.Tensor] = None
+        from vllm.v1.spec_decode.tree_decoding import SequenceTree
+        self.spec_tree: Optional[SequenceTree] = None
+        
         self.num_computed_tokens = 0
 
         # Multi-modal related
