@@ -103,25 +103,24 @@ __global__ void copy_slots_kernel(int64_t* kv_cache_ptrs,
                                   const int64_t* __restrict__ slot_mapping,
                                   const int numel_per_slot,
                                   const int block_size) {
-  // kv_cache shape: [num_blocks, 2, block_size, num_heads, head_size]
   const int layer_idx = blockIdx.x;
   const int pair_idx = blockIdx.y;
 
   scalar_t* kv_cache = 
       reinterpret_cast<scalar_t*>(kv_cache_ptrs[layer_idx]);
 
-  int64_t src_slot_number = block_mapping[2 * pair_idx];
-  int64_t dst_slot_number = block_mapping[2 * pair_idx + 1];
+  int64_t src_slot_number = slot_mapping[2 * pair_idx];
+  int64_t dst_slot_number = slot_mapping[2 * pair_idx + 1];
 
   const int64_t block_stride = 2 * block_size * numel_per_slot;
   const int64_t numel_per_block = block_size * numel_per_slot;
 
   const int64_t src_block_number = 
-      static_cast<const int64_t>(src_slot_number / block_size);
+      static_cast<int64_t>(src_slot_number / block_size);
   const int64_t dst_block_number = 
-      static_cast<const int64_t>(dst_slot_number / block_size);
-  const int64_t src_block_offset = src_block_number % block_size;
-  const int64_t dst_block_offset = dst_block_number % block_size;
+      static_cast<int64_t>(dst_slot_number / block_size);
+  const int64_t src_block_offset = src_slot_number % block_size;
+  const int64_t dst_block_offset = dst_slot_number % block_size;
 
   const int64_t src_slot_offset_key = 
       src_block_number * block_stride + src_block_offset * numel_per_slot;
@@ -133,6 +132,23 @@ __global__ void copy_slots_kernel(int64_t* kv_cache_ptrs,
   const int64_t dst_slot_offset_value = 
       dst_block_number * block_stride + numel_per_block + 
           dst_block_offset * numel_per_slot;
+
+  // if (pair_idx == 0 && layer_idx == 0 && threadIdx.x == 0) {
+  //   printf("from cuda kernel: layer_idx: %d, pair_idx: %d\n", layer_idx,
+  //          pair_idx);
+  //   printf("from cuda kernel: src_slot_number: %d, dst_slot_number: %d\n",
+  //          src_slot_number, dst_slot_number);
+  //   printf("from cuda kernel: src_block_number: %d, dst_block_number: %d\n",
+  //          src_block_number, dst_block_number);
+  //   printf("from cuda kernel: src_block_offset: %d, dst_block_offset: %d\n",
+  //           src_block_offset, dst_block_offset);
+  //   printf("from cuda kernel: src_slot_offset_key: %d, dst_slot_offset_key: "
+  //          "%d\n",
+  //          src_slot_offset_key, dst_slot_offset_key);
+  //   printf("from cuda kernel: src_slot_offset_value: %d, dst_slot_offset_value: "
+  //           "%d\n",
+  //           src_slot_offset_value, dst_slot_offset_value);
+  // }
 
   // Copy key
   for (int i = threadIdx.x; i < numel_per_slot; i += blockDim.x) {
@@ -251,6 +267,7 @@ void copy_slots(std::vector<torch::Tensor> const& kv_caches,
   const int block_size = kv_caches[0].size(2);
   printf("numel_per_slot: %d\n", numel_per_slot);
   printf("block_size: %d\n", block_size);
+  printf("num_pairs: %d\n", num_pairs);
 
   dim3 grid(num_layers, num_pairs);
   // Assumes numel_per_slot is a multiple of 32

@@ -972,7 +972,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         scheduler_output: "SchedulerOutput",
         intermediate_tensors: Optional[IntermediateTensors] = None,
     ) -> Union[ModelRunnerOutput, torch.Tensor]:
-        print0("--------------------execute_model---------------------")
+        #print0("--------------------execute_model---------------------")
         self._update_states(scheduler_output)
         if not scheduler_output.total_num_scheduled_tokens:
             # Return empty ModelRunnerOuptut if there's no work to do.
@@ -1081,6 +1081,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             output_token_ids: list[list[int]] = []
             last_accepted_idx: list[int] = []
 
+            # for token_id in range(30):
+            #     print0("token_id: ", token_id, "key_cache_buffer_before_copy: ",
+            #            self.kv_caches[79][token_id // 16, 0, token_id % 16, 0, :2])
+
             # def token_compare(draft, scorer):
             #     i = 0
             #     j = 0
@@ -1092,7 +1096,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #         else:
             #             break
             #     return j + 1
-            print0("num_draft_tokens: ", spec_decode_metadata.num_draft_tokens)
+            #print0("num_draft_tokens: ", spec_decode_metadata.num_draft_tokens)
             batch_id = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
                 slot_mapping_offset = processed_scorer_tokens
@@ -1101,7 +1105,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 scorer_token_ids_per_req = scorer_token_ids[
                     processed_scorer_tokens:processed_scorer_tokens +
                     num_draft_token]
-                print0("scorer_token_ids_per_req: ", scorer_token_ids_per_req)
+                #print0("scorer_token_ids_per_req: ", scorer_token_ids_per_req)
                 processed_scorer_tokens += num_draft_token
                 if num_draft_token == 1:
                     output_token_ids.append(scorer_token_ids_per_req)
@@ -1110,7 +1114,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     assert (batch_id < len(self.seq_trees))
                     accepted_tokens, accepted_idx = self.seq_trees[
                         batch_id].verify(scorer_token_ids_per_req)
-                    print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
+                    #print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
                     output_token_ids.append(accepted_tokens)
 
                     # Update last accepted index to make sure in the next round
@@ -1129,8 +1133,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
                     # Check if there's a need to copy the slots over
                     dst_accepted_idx = np.arange(len(accepted_idx))
-                    print0("slot_mapping: ", self.slot_mapping_np[:64])
-                    print0("block_table", self.input_batch.block_table.get_cpu_tensor()[0][:30])
+                    #print0("slot_mapping: ", self.slot_mapping_np[:64])
+                    #print0("block_table", self.input_batch.block_table.get_cpu_tensor()[0][:30])
                     #print0("bugbug: no slot copy")
                     for src_idx, dst_idx in zip(accepted_idx,
                                                 dst_accepted_idx):
@@ -1140,10 +1144,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                                      src_idx],
                                 self.slot_mapping_np[slot_mapping_offset +
                                                      dst_idx]]
-                            print0("copy slots: ", src_to_dst_np)
+                            #print0("copy slots: ", src_to_dst_np)
                             src_to_dst_d = torch.tensor(src_to_dst_np).to(
-                                torch.long).to(self.device).reshape(1, 2)
-                            print0("src_to_dst_d: ", src_to_dst_d.shape)
+                                torch.long).to(self.device).view(-1, 2)
+                            #print0("src_to_dst_d: ", src_to_dst_d.shape)
                             copy_slots(src_to_dst_d)
 
                 batch_id += 1
@@ -1151,8 +1155,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             sampler_output.sampled_token_ids = output_token_ids
 
         # for token_id in range(30):
-        #     print0("token_id: ", token_id, "key_cache_buffer: ",
-        #            self.kv_caches[79][token_id // 16, 0, token_id % 16, 0, :4])
+        #     print0("token_id: ", token_id, "key_cache_buffer_after_copy: ",
+        #            self.kv_caches[79][token_id // 16, 0, token_id % 16, 0, :2])
 
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
@@ -1186,10 +1190,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             valid_sampled_token_ids = sampled_token_ids.tolist()
             previous_hidden_states = sample_hidden_states
         else:
-            print0("last_accepted_idx: ", last_accepted_idx)
+            #print0("last_accepted_idx: ", last_accepted_idx)
             last_accepted_idx_d = torch.tensor(
                 last_accepted_idx, device=sample_hidden_states.device)
-            print0("last_accepted_idx_d: ", last_accepted_idx_d)
+            #print0("last_accepted_idx_d: ", last_accepted_idx_d)
             num_sampled_tokens = np.array(
                 spec_decode_metadata.num_draft_tokens)
             num_sampled_tokens_d = torch.tensor(
@@ -1220,14 +1224,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             for idx in range(len(spec_token_ids_ngram)):
                 st = SequenceTree()
                 last_token = valid_sampled_token_ids[idx][-1]
-                #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
+                st.add_sequence([last_token] + spec_token_ids_ngram[idx])
                 # bugbug
-                st.add_sequence([last_token] + [777, 777, 777])
+                #st.add_sequence([last_token] + [777, 777, 777])
                 st.add_sequence([last_token] + spec_token_ids_mlp[idx])
                 #print0("ngram candidate: ", [last_token] + spec_token_ids_ngram[idx])
-                print0("mlp candidate: ", [last_token] + spec_token_ids_mlp[idx])
+                #print0("mlp candidate: ", [last_token] + spec_token_ids_mlp[idx])
                 flattened_seq = st.flat()
-                print0("final candidate: ", flattened_seq)
+                #print0("final candidate: ", flattened_seq)
                 seq_trees.append(st)
                 spec_token_ids.append(flattened_seq[1:])
             # -----------------------------------------------------------------
