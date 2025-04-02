@@ -280,9 +280,10 @@ class FlashInferMetadataBuilder:
                 if (i < tree_mask_num):
                     tree_mask = self.runner.seq_trees[i].mask().to(
                                 self.runner.device)
-                    # from vllm.distributed.parallel_state import get_tp_group
-                    # if get_tp_group().is_first_rank:
-                    #     print("i", i, "tree_mask", tree_mask.shape)
+                    from vllm.distributed.parallel_state import get_tp_group
+                    if get_tp_group().is_first_rank:
+                        print("i", i, "tree_mask")
+                        print(tree_mask)
                     all_trues = torch.full((qo_len[i], kv_len[i] - qo_len[i]), True,
                                             device=self.runner.device)
                     mask_i = torch.cat((all_trues, tree_mask), dim=1)
@@ -293,6 +294,10 @@ class FlashInferMetadataBuilder:
                                    device=self.runner.device),
                         diagonal=(kv_len[i] - qo_len[i]),
                     )
+                    from vllm.distributed.parallel_state import get_tp_group
+                    if get_tp_group().is_first_rank:
+                        print("i", i, "mask")
+                        print(mask_i[:, -qo_len[i]:])
 
                 mask_arr.append(mask_i.flatten())
             custom_mask = torch.cat(mask_arr, dim=0)

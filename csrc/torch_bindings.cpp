@@ -523,7 +523,7 @@ TORCH_LIBRARY_EXPAND(CONCAT(TORCH_EXTENSION_NAME, _cache_ops), cache_ops) {
 
   // Copy the cache slots from src to dst.
   cache_ops.def(
-      "copy_slots(Tensor(a!)[] key_caches, Tensor[](b!) value_caches, "
+      "copy_slots(Tensor(a!)[] kv_caches, "
       "Tensor block_mapping) -> ()");
   cache_ops.impl("copy_slots", torch::kCUDA, &copy_slots);
 

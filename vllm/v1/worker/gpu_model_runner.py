@@ -147,8 +147,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Lazy initialization
         # self.model: nn.Module  # Set after load_model
         self.kv_caches: list[torch.Tensor] = []
-        self.key_caches: list[torch.Tensor] = None
-        self.value_caches: list[torch.Tensor] = None
+
         # req_id -> (input_id -> encoder_output)
         self.encoder_cache: dict[str, dict[int, torch.Tensor]] = {}
 
@@ -1093,7 +1092,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #         else:
             #             break
             #     return j + 1
-            print0("1094")
             print0("num_draft_tokens: ", spec_decode_metadata.num_draft_tokens)
             batch_id = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:
@@ -1127,14 +1125,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     def copy_slots(
                         src_to_dests: torch.Tensor,
                     ) -> None:
-                        if self.key_caches is None and self.value_caches is None:
-                            self.key_caches = [kv_cache[0] for kv_cache in self.kv_caches]
-                            self.value_caches = [kv_cache[1] for kv_cache in self.kv_caches]
-                        ops.copy_slots(self.key_caches, self.value_caches, src_to_dests)
+                        ops.copy_slots(self.kv_caches, src_to_dests)
 
                     # Check if there's a need to copy the slots over
                     dst_accepted_idx = np.arange(len(accepted_idx))
                     print0("slot_mapping: ", self.slot_mapping_np[:64])
+                    print0("block_table", self.input_batch.block_table.get_cpu_tensor()[0][:30])
+                    #print0("bugbug: no slot copy")
                     for src_idx, dst_idx in zip(accepted_idx,
                                                 dst_accepted_idx):
                         if (src_idx != dst_idx):
@@ -1152,7 +1149,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 batch_id += 1
 
             sampler_output.sampled_token_ids = output_token_ids
-        print0("1153")
+
+        # for token_id in range(30):
+        #     print0("token_id: ", token_id, "key_cache_buffer: ",
+        #            self.kv_caches[79][token_id // 16, 0, token_id % 16, 0, :4])
+
         # TODO(woosuk): The following loop can be slow since it iterates over
         # the requests one by one. Optimize.
         for i, generator in self.input_batch.generators.items():
@@ -1177,7 +1178,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             hidden_states,
             scheduler_output,
         )
-        print0("1178")
+
         # Get the valid generated tokens.
         previous_hidden_states = None
         sampled_token_ids = sampler_output.sampled_token_ids
@@ -1219,9 +1220,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             for idx in range(len(spec_token_ids_ngram)):
                 st = SequenceTree()
                 last_token = valid_sampled_token_ids[idx][-1]
-                st.add_sequence([last_token] + spec_token_ids_ngram[idx])
+                #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
+                # bugbug
+                st.add_sequence([last_token] + [777, 777, 777])
                 st.add_sequence([last_token] + spec_token_ids_mlp[idx])
-                print0("ngram candidate: ", [last_token] + spec_token_ids_ngram[idx])
+                #print0("ngram candidate: ", [last_token] + spec_token_ids_ngram[idx])
                 print0("mlp candidate: ", [last_token] + spec_token_ids_mlp[idx])
                 flattened_seq = st.flat()
                 print0("final candidate: ", flattened_seq)

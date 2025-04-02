@@ -97,6 +97,57 @@ __global__ void copy_blocks_kernel(int64_t* key_cache_ptrs,
   }
 }
 
+// Grid: (num_layers, num_pairs)
+template <typename scalar_t>
+__global__ void copy_slots_kernel(int64_t* kv_cache_ptrs,
+                                  const int64_t* __restrict__ slot_mapping,
+                                  const int numel_per_slot,
+                                  const int block_size) {
+  // kv_cache shape: [num_blocks, 2, block_size, num_heads, head_size]
+  const int layer_idx = blockIdx.x;
+  const int pair_idx = blockIdx.y;
+
+  scalar_t* kv_cache = 
+      reinterpret_cast<scalar_t*>(kv_cache_ptrs[layer_idx]);
+
+  int64_t src_slot_number = block_mapping[2 * pair_idx];
+  int64_t dst_slot_number = block_mapping[2 * pair_idx + 1];
+
+  const int64_t block_stride = 2 * block_size * numel_per_slot;
+  const int64_t numel_per_block = block_size * numel_per_slot;
+
+  const int64_t src_block_number = 
+      static_cast<const int64_t>(src_slot_number / block_size);
+  const int64_t dst_block_number = 
+      static_cast<const int64_t>(dst_slot_number / block_size);
+  const int64_t src_block_offset = src_block_number % block_size;
+  const int64_t dst_block_offset = dst_block_number % block_size;
+
+  const int64_t src_slot_offset_key = 
+      src_block_number * block_stride + src_block_offset * numel_per_slot;
+  const int64_t dst_slot_offset_key = 
+      dst_block_number * block_stride + dst_block_offset * numel_per_slot;
+  const int64_t src_slot_offset_value = 
+      src_block_number * block_stride + numel_per_block + 
+          src_block_offset * numel_per_slot;
+  const int64_t dst_slot_offset_value = 
+      dst_block_number * block_stride + numel_per_block + 
+          dst_block_offset * numel_per_slot;
+
+  // Copy key
+  for (int i = threadIdx.x; i < numel_per_slot; i += blockDim.x) {
+    int64_t src_offset = src_slot_offset_key + i;
+    int64_t dst_offset = dst_slot_offset_key + i;
+    kv_cache[dst_offset] = kv_cache[src_offset];
+  }
+  // Copy value
+  for (int i = threadIdx.x; i < numel_per_slot; i += blockDim.x) {
+    int64_t src_offset = src_slot_offset_value + i;
+    int64_t dst_offset = dst_slot_offset_value + i;
+    kv_cache[dst_offset] = kv_cache[src_offset];
+  }
+}
+
 // Kernel for MLA, which works on a single joint kv_cache
 // Grid: (num_layers, num_pairs)
 template <typename scalar_t>
@@ -169,26 +220,21 @@ void copy_blocks(std::vector<torch::Tensor> const& key_caches,
       }));
 }
 
-void copy_slots(std::vector<torch::Tensor> const& key_caches,
-                std::vector<torch::Tensor> const& value_caches,
+void copy_slots(std::vector<torch::Tensor> const& kv_caches,
                 const torch::Tensor& slot_mapping) {
-  int num_layers = key_caches.size();
-  TORCH_CHECK(num_layers == value_caches.size());
+  int num_layers = kv_caches.size();
   if (num_layers == 0) {
     return;
   }
-  torch::Device cache_device = key_caches[0].device();
+  torch::Device cache_device = kv_caches[0].device();
   TORCH_CHECK(cache_device.is_cuda());
 
   // Create data structures for the kernel.
   // Create an array of pointers to the key and value caches.
-  int64_t key_cache_ptrs[num_layers];
-  int64_t value_cache_ptrs[num_layers];
+  int64_t kv_cache_ptrs[num_layers];
   for (int layer_idx = 0; layer_idx < num_layers; ++layer_idx) {
-    key_cache_ptrs[layer_idx] =
-        reinterpret_cast<int64_t>(key_caches[layer_idx].data_ptr());
-    value_cache_ptrs[layer_idx] =
-        reinterpret_cast<int64_t>(value_caches[layer_idx].data_ptr());
+    kv_cache_ptrs[layer_idx] =
+        reinterpret_cast<int64_t>(kv_caches[layer_idx].data_ptr());
   }
 
   // slot_mapping is a 2D tensor with shape (num_pairs, 2).
@@ -196,26 +242,27 @@ void copy_slots(std::vector<torch::Tensor> const& key_caches,
 
   // Move the data structures to the GPU.
   // NOTE: This synchronizes the CPU and GPU.
-  torch::Tensor key_cache_ptrs_tensor =
-      torch::from_blob(key_cache_ptrs, {num_layers}, torch::kInt64)
-          .to(cache_device);
-  torch::Tensor value_cache_ptrs_tensor =
-      torch::from_blob(value_cache_ptrs, {num_layers}, torch::kInt64)
+  torch::Tensor kv_cache_ptrs_tensor =
+      torch::from_blob(kv_cache_ptrs, {num_layers}, torch::kInt64)
           .to(cache_device);
 
   // Launch the kernel.
-  const int numel_per_slot = key_caches[0][0][0].numel();
+  const int numel_per_slot = kv_caches[0][0][0][0].numel();
+  const int block_size = kv_caches[0].size(2);
+  printf("numel_per_slot: %d\n", numel_per_slot);
+  printf("block_size: %d\n", block_size);
+
   dim3 grid(num_layers, num_pairs);
   // Assumes numel_per_slot is a multiple of 32
   dim3 block(std::min(1024, numel_per_slot));
   const at::cuda::OptionalCUDAGuard device_guard(cache_device);
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   VLLM_DISPATCH_FLOATING_AND_BYTE_TYPES(
-      key_caches[0].scalar_type(), "copy_blocks_kernel", ([&] {
-        vllm::copy_blocks_kernel<scalar_t><<<grid, block, 0, stream>>>(
-            key_cache_ptrs_tensor.data_ptr<int64_t>(),
-            value_cache_ptrs_tensor.data_ptr<int64_t>(),
-            slot_mapping.data_ptr<int64_t>(), numel_per_slot);
+      kv_caches[0].scalar_type(), "copy_slots_kernel", ([&] {
+        vllm::copy_slots_kernel<scalar_t><<<grid, block, 0, stream>>>(
+            kv_cache_ptrs_tensor.data_ptr<int64_t>(),
+            slot_mapping.data_ptr<int64_t>(), numel_per_slot,
+            block_size);
       }));
 }
 
