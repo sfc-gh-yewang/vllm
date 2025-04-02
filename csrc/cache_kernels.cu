@@ -265,9 +265,9 @@ void copy_slots(std::vector<torch::Tensor> const& kv_caches,
   // Launch the kernel.
   const int numel_per_slot = kv_caches[0][0][0][0].numel();
   const int block_size = kv_caches[0].size(2);
-  printf("numel_per_slot: %d\n", numel_per_slot);
-  printf("block_size: %d\n", block_size);
-  printf("num_pairs: %d\n", num_pairs);
+  // printf("numel_per_slot: %d\n", numel_per_slot);
+  // printf("block_size: %d\n", block_size);
+  // printf("num_pairs: %d\n", num_pairs);
 
   dim3 grid(num_layers, num_pairs);
   // Assumes numel_per_slot is a multiple of 32
