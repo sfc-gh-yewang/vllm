@@ -1096,6 +1096,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             #         else:
             #             break
             #     return j + 1
+
             #print0("num_draft_tokens: ", spec_decode_metadata.num_draft_tokens)
             batch_id = 0
             for num_draft_token in spec_decode_metadata.num_draft_tokens:

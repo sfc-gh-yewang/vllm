@@ -272,18 +272,19 @@ class FlashInferMetadataBuilder:
                        attn_metadata.paged_kv_indptr[:-1] - 1) +
                       attn_metadata.paged_kv_last_page_len).cpu().tolist()
             batch_size = len(qo_len)
-            # from vllm.distributed.parallel_state import get_tp_group
+            from vllm.distributed.parallel_state import get_tp_group
             # if get_tp_group().is_first_rank:
             #     print("qo_len", qo_len)
+            #     tree_mask_num = len(self.runner.seq_trees)
+            #     for k in range(tree_mask_num):
+            #         print("k", k)
+            #         print("mask", self.runner.seq_trees[k].mask())
+
             tree_mask_num = len(self.runner.seq_trees)
             for i in range(batch_size):
                 if (i < tree_mask_num):
                     tree_mask = self.runner.seq_trees[i].mask().to(
                                 self.runner.device)
-                    # from vllm.distributed.parallel_state import get_tp_group
-                    # if get_tp_group().is_first_rank:
-                    #     print("i", i, "tree_mask")
-                    #     print(tree_mask)
                     all_trues = torch.full((qo_len[i], kv_len[i] - qo_len[i]), True,
                                             device=self.runner.device)
                     mask_i = torch.cat((all_trues, tree_mask), dim=1)
