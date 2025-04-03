@@ -1115,6 +1115,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     assert (batch_id < len(self.seq_trees))
                     accepted_tokens, accepted_idx = self.seq_trees[
                         batch_id].verify(scorer_token_ids_per_req)
+                    batch_id += 1
                     #print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
                     output_token_ids.append(accepted_tokens)
 
@@ -1150,8 +1151,6 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                 torch.long).to(self.device).view(-1, 2)
                             #print0("src_to_dst_d: ", src_to_dst_d.shape)
                             copy_slots(src_to_dst_d)
-
-                batch_id += 1
 
             sampler_output.sampled_token_ids = output_token_ids
 
