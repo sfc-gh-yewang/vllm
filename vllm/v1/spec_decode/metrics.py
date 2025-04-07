@@ -38,6 +38,11 @@ class SpecDecodingMetrics:
         self.num_draft_tokens: list[int] = []
         self.num_accepted_tokens: list[int] = []
 
+    def archive(self, num_draft_tokens: int, num_accepted_tokens: int):
+        self.reset()
+        self.num_draft_tokens.append(num_draft_tokens)
+        self.num_accepted_tokens.append(num_accepted_tokens)
+
     def observe(self, spec_decoding_stats: SpecDecodingStats):
         self.num_draft_tokens.append(spec_decoding_stats.num_draft_tokens)
         self.num_accepted_tokens.append(
@@ -56,4 +61,5 @@ class SpecDecodingMetrics:
             "Number of accepted tokens: %d, "
             "Number of draft tokens: %d, ", draft_acceptance_rate,
             num_accepted_tokens, num_draft_tokens)
-        self.reset()
+        
+        self.archive(num_draft_tokens, num_accepted_tokens)
