@@ -1124,7 +1124,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             valid_sampled_token_ids = self.rejection_sampler.parse_output(
                 sampled_token_ids, self.input_batch.vocab_size)
 
-        if not self.use_spec_decode:
+        disable_spec_decode = (
+            self.speculative_config and 
+            self.speculative_config.speculative_disable_by_batch_size and
+            len(self.input_batch.req_ids) > self.speculative_config.speculative_disable_by_batch_size
+        )   
+
+        if not self.use_spec_decode or disable_spec_decode:
             spec_token_ids = None
         else:
             # -----------------------------------------------------------------
