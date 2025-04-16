@@ -302,6 +302,52 @@ class MLPSpeculator(nn.Module):
             else:
                 next_tokens_tensors[head_index].copy_(last_tokens)
 
+    def generate_multiple_token_ids(
+        self,
+        batch_size: int,
+        num_predict_tokens: int,
+        last_tokens: torch.Tensor,
+        previous_hidden_states: torch.Tensor,
+        next_tokens_tensors: List[torch.Tensor],
+        all_token_tensors: List[torch.Tensor],
+    ) -> torch.Tensor:
+        for head_index in range(num_predict_tokens):
+            states = self.generate_states(
+                last_tokens, previous_hidden_states, head_index
+            )
+            previous_hidden_states = states
+            states = states.flatten(0, 1)
+            head_weight = (
+                self.qhead[head_index]
+                if self.qhead is not None and batch_size <= 32
+                else self.head[head_index]
+            )
+            logits = self.logits_processor(head_weight, states)
+
+            topk = 3
+
+            if get_tensor_model_parallel_world_size() == 1:
+                assert topk == 1
+                last_tokens = torch.argmax(logits, dim=-1).reshape(batch_size, -1)
+            else:
+                vals, indices = torch.topk(logits, topk, dim=-1)
+                indices = indices + get_tensor_model_parallel_rank() * logits.shape[-1]
+                vals = tensor_model_parallel_all_gather(vals)
+                indices = tensor_model_parallel_all_gather(indices)
+
+                argidx = torch.argmax(vals, -1).reshape(batch_size, -1)
+                last_tokens = torch.gather(indices, -1, argidx)
+
+                more_indices = torch.topk(vals, topk, dim=-1, sorted=True).indices
+                more_tokens = torch.gather(indices, -1, more_indices)
+
+                all_token_tensors.append(more_tokens)
+
+            if next_tokens_tensors[head_index] == None:
+                next_tokens_tensors[head_index] = last_tokens
+            else:
+                next_tokens_tensors[head_index].copy_(last_tokens)
+
     def generate_proposals(
         self,
         input_ids: torch.Tensor,
@@ -324,6 +370,7 @@ class MLPSpeculator(nn.Module):
         batch_size = input_ids.size(0)
 
         static_next_tokens = [None] * num_predict_tokens
+        all_token_tensors : List[torch.Tensor] = []
 
         if self.cuda_graph_mode and batch_size <= self.cuda_graph_max_batch_size:
             padded_size, static_last_tokens, static_hidden_states = (
@@ -358,12 +405,20 @@ class MLPSpeculator(nn.Module):
             else:
                 g.replay()
         else:
-            self.generate_token_ids(
+            # self.generate_token_ids(
+            #     batch_size,
+            #     num_predict_tokens,
+            #     last_tokens,
+            #     previous_hidden_states,
+            #     static_next_tokens,
+            # )
+            self.generate_multiple_token_ids(
                 batch_size,
                 num_predict_tokens,
                 last_tokens,
                 previous_hidden_states,
                 static_next_tokens,
+                all_token_tensors,
             )
 
         next_tokens = []
@@ -371,7 +426,7 @@ class MLPSpeculator(nn.Module):
             next_tokens.append(
                 static_next_tokens[i][:batch_size])
 
-        return torch.cat(next_tokens, dim=-1)
+        return torch.cat(next_tokens, dim=-1), all_token_tensors
 
     def maybe_load_weight(self, param, loaded_weight):
         if param is not None:

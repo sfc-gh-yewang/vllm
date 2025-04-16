@@ -1116,7 +1116,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     accepted_tokens, accepted_idx = self.seq_trees[
                         batch_id].verify(scorer_token_ids_per_req)
                     batch_id += 1
-                    #print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
+                    print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
                     output_token_ids.append(accepted_tokens)
 
                     # Update last accepted index to make sure in the next round
@@ -1146,7 +1146,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                                      src_idx],
                                 self.slot_mapping_np[slot_mapping_offset +
                                                      dst_idx]]
-                            #print0("copy slots: ", src_to_dst_np)
+                            print0("copy slots: ", src_to_dst_np)
                             src_to_dst_d = torch.tensor(src_to_dst_np).to(
                                 torch.long).to(self.device).view(-1, 2)
                             #print0("src_to_dst_d: ", src_to_dst_d.shape)
@@ -1209,29 +1209,33 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         else:
             # -----------------------------------------------------------------
             # Concating the two draft token ids and generate a tree mask
-            spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
-                valid_sampled_token_ids, sampling_metadata)
+            # spec_token_ids_ngram = self.generate_draft_token_ids_ngram(
+            #     valid_sampled_token_ids, sampling_metadata)
 
-            spec_token_ids_mlp = self.generate_draft_token_ids_mlp(
+            spec_token_ids_mlp, candidates = self.generate_draft_token_ids_mlp(
                 valid_sampled_token_ids, sampling_metadata,
                 previous_hidden_states)
+            print0("spec_token_ids_mlp: ", spec_token_ids_mlp)
             # # concatenate the two draft token ids
             seq_trees = []
             spec_token_ids: list[list[int]] = []
 
             from vllm.v1.spec_decode.tree_decoding import SequenceTree
 
-            for idx in range(len(spec_token_ids_ngram)):
+            for idx in range(len(spec_token_ids_mlp)):
                 st = SequenceTree()
                 last_token = valid_sampled_token_ids[idx][-1]
-                st.add_sequence([last_token] + spec_token_ids_ngram[idx])
-                # bugbug
-                #st.add_sequence([last_token] + [777, 777, 777])
-                st.add_sequence([last_token] + spec_token_ids_mlp[idx])
-                #print0("ngram candidate: ", [last_token] + spec_token_ids_ngram[idx])
-                #print0("mlp candidate: ", [last_token] + spec_token_ids_mlp[idx])
+                #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
+                #st.add_sequence([last_token] + spec_token_ids_mlp[idx])
+                for j in range(len(candidates[idx])):
+                    st.add_sequence([last_token] + candidates[idx][j])
+
                 flattened_seq = st.flat()
-                #print0("final candidate: ", flattened_seq)
+
+                print0("flatteend_seq: ", flattened_seq)
+                print0("mask: ")
+                print0(st.mask())
+
                 seq_trees.append(st)
                 spec_token_ids.append(flattened_seq[1:])
             # -----------------------------------------------------------------
@@ -1317,14 +1321,14 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.input_batch.token_ids_cpu[i, start_idx:end_idx] = sampled_ids
             last_tokens.append(self.input_batch.token_ids_cpu[i, end_idx - 1])
 
-        drafter_output = self.mlp_drafter.propose(
+        drafter_output, candidates = self.mlp_drafter.propose(
             last_tokens,
             previous_hidden_states=previous_hidden_states,
         )
 
         draft_token_ids = drafter_output.tolist()
 
-        return draft_token_ids
+        return draft_token_ids, candidates
 
     def load_model(self) -> None:
         logger.info("Starting to load model %s...", self.model_config.model)
