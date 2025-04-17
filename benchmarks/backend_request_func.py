@@ -245,8 +245,7 @@ async def async_request_openai_completions(
             "model": request_func_input.model_name \
                 if request_func_input.model_name else request_func_input.model,
             "prompt": request_func_input.prompt,
-            "temperature": 0.6,
-            "top_p": 0.9,
+            "temperature": 0.0,
             "max_tokens": request_func_input.output_len,
             "logprobs": request_func_input.logprobs,
             "stream": True,
@@ -352,8 +351,7 @@ async def async_request_openai_chat_completions(
                     "content": content
                 },
             ],
-            "temperature": 0.6,
-            "top_p": 0.9,
+            "temperature": 0.0,
             "max_completion_tokens": request_func_input.output_len,
             "stream": True,
             "stream_options": {

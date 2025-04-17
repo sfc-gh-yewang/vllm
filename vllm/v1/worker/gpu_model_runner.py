@@ -1228,11 +1228,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
 
                 # only mlp spec
-                st.add_sequence([last_token] + spec_token_ids_mlp[idx])
+                # st.add_sequence([last_token] + spec_token_ids_mlp[idx])
 
                 # Tree token with mlp spec
-                # for j in range(len(candidates[idx])):
-                #     st.add_sequence([last_token] + candidates[idx][j])
+                for j in range(len(candidates[idx])):
+                    st.add_sequence([last_token] + candidates[idx][j])
 
                 flattened_seq = st.flat()
 

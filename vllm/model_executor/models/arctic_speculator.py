@@ -327,8 +327,10 @@ class MLPSpeculator(nn.Module):
             topk = 3
 
             if get_tensor_model_parallel_world_size() == 1:
-                assert topk == 1
                 last_tokens = torch.argmax(logits, dim=-1).reshape(batch_size, -1)
+
+                _, more_tokens = torch.topk(logits, topk, dim=-1)
+                all_token_tensors.append(more_tokens)
             else:
                 vals, indices = torch.topk(logits, topk, dim=-1)
                 indices = indices + get_tensor_model_parallel_rank() * logits.shape[-1]
