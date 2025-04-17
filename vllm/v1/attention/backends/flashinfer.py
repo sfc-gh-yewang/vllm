@@ -235,6 +235,45 @@ class FlashInferMetadataBuilder:
         if self.global_hyperparameters is None:
             self.global_hyperparameters = infer_global_hyperparameters(
                 get_per_layer_parameters(self.vllm_config))
+            
+        mask_arr = []
+        qo_len = (attn_metadata.qo_indptr[1:] -
+                  attn_metadata.qo_indptr[:-1]).cpu().tolist()
+        kv_len = (attn_metadata.page_size *
+                  (attn_metadata.paged_kv_indptr[1:] -
+                   attn_metadata.paged_kv_indptr[:-1] - 1) +
+                  attn_metadata.paged_kv_last_page_len).cpu().tolist()
+        batch_size = len(qo_len)
+        from vllm.distributed.parallel_state import get_tp_group
+        # if get_tp_group().is_first_rank:
+        #     print("qo_len", qo_len)
+        #     tree_mask_num = len(self.runner.seq_trees)
+        #     for k in range(tree_mask_num):
+        #         print("k", k)
+        #         print("mask", self.runner.seq_trees[k].mask())
+
+        tree_mask_num = len(self.runner.seq_trees)
+        for i in range(batch_size):
+            if (i < tree_mask_num):
+                tree_mask = self.runner.seq_trees[i].mask().to(
+                            self.runner.device)
+                all_trues = torch.full((qo_len[i], kv_len[i] - qo_len[i]), True,
+                                        device=self.runner.device)
+                mask_i = torch.cat((all_trues, tree_mask), dim=1)
+            else:
+                mask_i = torch.tril(
+                    torch.full((qo_len[i], kv_len[i]),
+                               True,
+                               device=self.runner.device),
+                    diagonal=(kv_len[i] - qo_len[i]),
+                )
+                # from vllm.distributed.parallel_state import get_tp_group
+                # if get_tp_group().is_first_rank:
+                #     print("i", i, "mask")
+                #     print(mask_i[:, -qo_len[i]:])
+            mask_arr.append(mask_i.flatten())
+        custom_mask = torch.cat(mask_arr, dim=0)
+
         if attn_metadata.use_cascade:
             attn_metadata.cascade_wrapper = self._get_cascade_wrapper()
             attn_metadata.cascade_wrapper.plan(
@@ -255,7 +294,8 @@ class FlashInferMetadataBuilder:
                 attn_metadata.num_kv_heads,
                 attn_metadata.head_dim,
                 attn_metadata.page_size,
-                causal=True,
+                # causal=True,
+                custom_mask=custom_mask,
                 sm_scale=self.global_hyperparameters.sm_scale,
                 window_left=self.global_hyperparameters.window_left,
                 logits_soft_cap=self.global_hyperparameters.logits_soft_cap,
@@ -263,45 +303,6 @@ class FlashInferMetadataBuilder:
             )
         else:
             attn_metadata.prefill_wrapper = self._get_prefill_wrapper()
-
-            mask_arr = []
-            qo_len = (attn_metadata.qo_indptr[1:] -
-                      attn_metadata.qo_indptr[:-1]).cpu().tolist()
-            kv_len = (attn_metadata.page_size *
-                      (attn_metadata.paged_kv_indptr[1:] -
-                       attn_metadata.paged_kv_indptr[:-1] - 1) +
-                      attn_metadata.paged_kv_last_page_len).cpu().tolist()
-            batch_size = len(qo_len)
-            from vllm.distributed.parallel_state import get_tp_group
-            # if get_tp_group().is_first_rank:
-            #     print("qo_len", qo_len)
-            #     tree_mask_num = len(self.runner.seq_trees)
-            #     for k in range(tree_mask_num):
-            #         print("k", k)
-            #         print("mask", self.runner.seq_trees[k].mask())
-
-            tree_mask_num = len(self.runner.seq_trees)
-            for i in range(batch_size):
-                if (i < tree_mask_num):
-                    tree_mask = self.runner.seq_trees[i].mask().to(
-                                self.runner.device)
-                    all_trues = torch.full((qo_len[i], kv_len[i] - qo_len[i]), True,
-                                            device=self.runner.device)
-                    mask_i = torch.cat((all_trues, tree_mask), dim=1)
-                else:
-                    mask_i = torch.tril(
-                        torch.full((qo_len[i], kv_len[i]),
-                                   True,
-                                   device=self.runner.device),
-                        diagonal=(kv_len[i] - qo_len[i]),
-                    )
-                    # from vllm.distributed.parallel_state import get_tp_group
-                    # if get_tp_group().is_first_rank:
-                    #     print("i", i, "mask")
-                    #     print(mask_i[:, -qo_len[i]:])
-
-                mask_arr.append(mask_i.flatten())
-            custom_mask = torch.cat(mask_arr, dim=0)
 
             attn_metadata.prefill_wrapper.plan(
                 attn_metadata.qo_indptr,

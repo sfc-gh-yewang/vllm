@@ -583,6 +583,8 @@ class Scheduler:
                 request.num_computed_tokens += num_computed_tokens_step
 
                 if spec_decoding_stats is not None:
+                    # print("scheduled_spec_token_ids", scheduled_spec_token_ids)
+                    # print("generated_token_ids", generated_token_ids)
                     spec_decoding_stats.observe(
                         num_draft_tokens=len(scheduled_spec_token_ids),
                         num_accepted_tokens=len(generated_token_ids) - 1)

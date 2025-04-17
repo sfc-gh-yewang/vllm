@@ -1116,7 +1116,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                     accepted_tokens, accepted_idx = self.seq_trees[
                         batch_id].verify(scorer_token_ids_per_req)
                     batch_id += 1
-                    print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
+                    #print0("accepted_tokens: ", accepted_tokens, "accepted_idx: ", accepted_idx)
                     output_token_ids.append(accepted_tokens)
 
                     # Update last accepted index to make sure in the next round
@@ -1146,7 +1146,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                                      src_idx],
                                 self.slot_mapping_np[slot_mapping_offset +
                                                      dst_idx]]
-                            print0("copy slots: ", src_to_dst_np)
+                            #print0("copy slots: ", src_to_dst_np)
                             src_to_dst_d = torch.tensor(src_to_dst_np).to(
                                 torch.long).to(self.device).view(-1, 2)
                             #print0("src_to_dst_d: ", src_to_dst_d.shape)
@@ -1215,7 +1215,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             spec_token_ids_mlp, candidates = self.generate_draft_token_ids_mlp(
                 valid_sampled_token_ids, sampling_metadata,
                 previous_hidden_states)
-            print0("spec_token_ids_mlp: ", spec_token_ids_mlp)
+            #print0("spec_token_ids_mlp: ", spec_token_ids_mlp)
             # # concatenate the two draft token ids
             seq_trees = []
             spec_token_ids: list[list[int]] = []
@@ -1226,15 +1226,19 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                 st = SequenceTree()
                 last_token = valid_sampled_token_ids[idx][-1]
                 #st.add_sequence([last_token] + spec_token_ids_ngram[idx])
-                #st.add_sequence([last_token] + spec_token_ids_mlp[idx])
-                for j in range(len(candidates[idx])):
-                    st.add_sequence([last_token] + candidates[idx][j])
+
+                # only mlp spec
+                st.add_sequence([last_token] + spec_token_ids_mlp[idx])
+
+                # Tree token with mlp spec
+                # for j in range(len(candidates[idx])):
+                #     st.add_sequence([last_token] + candidates[idx][j])
 
                 flattened_seq = st.flat()
 
-                print0("flatteend_seq: ", flattened_seq)
-                print0("mask: ")
-                print0(st.mask())
+                #print0("flatteend_seq: ", flattened_seq)
+                #print0("mask: ")
+                #print0(st.mask())
 
                 seq_trees.append(st)
                 spec_token_ids.append(flattened_seq[1:])
