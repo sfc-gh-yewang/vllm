@@ -790,10 +790,8 @@ class Scheduler(SchedulerInterface):
                 #     request.spec_token_ids = metadata.grammar.validate_tokens(  # type: ignore[union-attr]
                 #         spec_token_ids[req_index])
                 if request.use_structured_output:
-                    print("use_structured_output is True, no spec_token_ids")
                     request.spec_token_ids = []
                 else:
-                    print("use_structured_output is False, using spec_token_ids")
                     request.spec_token_ids = spec_token_ids[req_index]
 
             # Get prompt logprobs for this request.
