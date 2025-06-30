@@ -59,9 +59,9 @@ install(
   FILES_MATCHING PATTERN "*.py"
 )
 
-install(
-  DIRECTORY ${vllm-flash-attn_SOURCE_DIR}/vllm_flash_attn/
-  DESTINATION vllm_flash_attn
-  COMPONENT _vllm_fa3_C
-  FILES_MATCHING PATTERN "*.py"
-)
+#install(
+#  DIRECTORY ${vllm-flash-attn_SOURCE_DIR}/vllm_flash_attn/
+#  DESTINATION vllm_flash_attn
+#  COMPONENT _vllm_fa3_C
+#  FILES_MATCHING PATTERN "*.py"
+#)
