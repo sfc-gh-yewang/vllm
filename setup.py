@@ -378,7 +378,7 @@ class repackage_wheel(build_ext):
                 "vllm/_moe_C.abi3.so",
                 "vllm/_flashmla_C.abi3.so",
                 "vllm/vllm_flash_attn/_vllm_fa2_C.abi3.so",
-                "vllm/vllm_flash_attn/_vllm_fa3_C.abi3.so",
+                # "vllm/vllm_flash_attn/_vllm_fa3_C.abi3.so",
                 "vllm/cumem_allocator.abi3.so",
                 # "vllm/_version.py", # not available in nightly wheels yet
             ]
@@ -654,8 +654,8 @@ if _is_cuda():
     ext_modules.append(CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa2_C"))
     if envs.VLLM_USE_PRECOMPILED or get_nvcc_cuda_version() >= Version("12.3"):
         # FA3 requires CUDA 12.3 or later
-        ext_modules.append(
-            CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa3_C"))
+        # ext_modules.append(
+        #    CMakeExtension(name="vllm.vllm_flash_attn._vllm_fa3_C"))
         # Optional since this doesn't get built (produce an .so file) when
         # not targeting a hopper system
         ext_modules.append(
